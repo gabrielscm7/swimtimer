@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SwimTimer</title>
+    <link rel="stylesheet" href="/static/style.css" />
+  </head>
+  <body>
+    <main class="app">
+      <div class="topbar">
+        <div class="brand">Swim<span>Timer</span></div>
+        <span class="badge" id="conn-badge">conectando...</span>
+      </div>
+
+      <div class="panel center">
+        <h2>Maratona Aquática</h2>
+        <p class="muted">Escolha o perfil de acesso</p>
+      </div>
+
+      <div class="entry-grid">
+        <a class="entry-card" href="fiscal.html">
+          <span class="icon">📱</span>
+          Fiscal
+          <small>Registrar chegadas</small>
+        </a>
+        <a class="entry-card" href="dashboard.html">
+          <span class="icon">📺</span>
+          Dashboard
+          <small>Ranking no telão</small>
+        </a>
+        <a class="entry-card" href="admin.html">
+          <span class="icon">⚙️</span>
+          Admin
+          <small>Configurar e controlar</small>
+        </a>
+      </div>
+    </main>
+
+    <script src="/static/app.js"></script>
+    <script>
+      const badge = document.getElementById("conn-badge");
+      const ws = new WSClient(wsUrl(), (message) => {
+        if (message.type === "state" && message.competition) {
+          badge.textContent = message.competition.name;
+        }
+      });
+      ws.onStatusChange = (connected) => {
+        badge.classList.toggle("online", connected);
+        badge.classList.toggle("offline", !connected);
+        badge.textContent = connected ? "online" : "offline";
+      };
+      ws.connect();
+    </script>
+  </body>
+</html>

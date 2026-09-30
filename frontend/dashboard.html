@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#071019" />
+    <title>SwimTimer — Dashboard</title>
+    <link rel="stylesheet" href="/static/style.css" />
+    <style>
+      .dashboard-clock-label {
+        text-align: center;
+        color: var(--muted);
+        letter-spacing: 2px;
+        text-transform: uppercase;
+        font-size: 0.75rem;
+      }
+      .remaining {
+        text-align: center;
+        color: var(--muted);
+        font-size: 1rem;
+        margin-top: -6px;
+      }
+      .rank-row .rank-team {
+        font-size: 1.4rem;
+      }
+      .rank-row .rank-laps {
+        font-size: 1.8rem;
+      }
+      .rank-row .rank-pos {
+        font-size: 1.8rem;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="app">
+      <div class="topbar">
+        <div class="brand">Swim<span>Timer</span></div>
+        <span class="badge offline" id="conn-badge">offline</span>
+      </div>
+
+      <div class="panel">
+        <h2 id="competition-name" class="center">Maratona Aquática</h2>
+        <div class="banner-finished" id="finished-banner" hidden>🏆 PROVA ENCERRADA</div>
+        <div class="dashboard-clock-label">Tempo decorrido</div>
+        <div class="clock" id="clock">00:00:00</div>
+        <div class="remaining" id="remaining">restante 00:00:00</div>
+      </div>
+
+      <div class="panel">
+        <h2 id="ranking-title">Ranking em tempo real</h2>
+        <div class="ranking" id="ranking">
+          <p class="muted">Aguardando competição...</p>
+        </div>
+      </div>
+    </main>
+
+    <script src="/static/app.js"></script>
+    <script>
+      const els = {
+        badge: document.getElementById("conn-badge"),
+        name: document.getElementById("competition-name"),
+        banner: document.getElementById("finished-banner"),
+        rankingTitle: document.getElementById("ranking-title"),
+        clock: document.getElementById("clock"),
+        remaining: document.getElementById("remaining"),
+        ranking: document.getElementById("ranking"),
+      };
+
+      let latestState = null;
+      let timerState = { elapsed_s: 0, remaining_s: 0 };
+      let clockAnchor = { at: Date.now(), elapsed: 0 };
+      const flashLanes = new Set();
+      let frozenResults = null;
+
+      function isBateria() {
+        return (
+          latestState &&
+          latestState.competition &&
+          (latestState.competition.event_type || "maratona") === "bateria"
+        );
+      }
+
+      function batteryElapsed() {
+        const competition = latestState && latestState.competition;
+        if (!competition) return 0;
+        if (competition.status === "finished" && competition.finished_at && competition.started_at) {
+          return competition.finished_at - competition.started_at;
+        }
+        if (competition.status !== "active") return 0;
+        return clockAnchor.elapsed + (Date.now() - clockAnchor.at) / 1000;
+      }
+
+      function updateClock() {
+        if (isBateria()) {
+          els.clock.textContent = formatTenths(batteryElapsed());
+          els.remaining.style.display = "none";
+        } else {
+          els.clock.textContent = formatClock(timerState.elapsed_s);
+          els.remaining.style.display = "";
+          els.remaining.textContent = `restante ${formatClock(timerState.remaining_s)}`;
+        }
+      }
+
+      function renderMaratona() {
+        els.banner.hidden = true;
+        els.rankingTitle.textContent = "Ranking em tempo real";
+        if (!latestState || !latestState.competition) {
+          els.name.textContent = "Aguardando competição";
+          els.ranking.innerHTML = '<p class="muted">Aguardando competição...</p>';
+          return;
+        }
+        els.name.textContent = latestState.competition.name;
+        const lanes = [...latestState.lanes].sort((a, b) => b.meters - a.meters);
+
+        els.ranking.innerHTML = "";
+        lanes.forEach((lane, index) => {
+          const row = document.createElement("div");
+          row.className = "rank-row";
+          if (flashLanes.has(lane.id)) row.classList.add("flash");
+          row.innerHTML = `
+            <div class="rank-pos">${index + 1}º</div>
+            <div>
+              <div class="rank-team">${lane.team || "Sem equipe"}</div>
+              <div class="rank-lane">raia ${lane.number} · ${lane.meters} m</div>
+            </div>
+            <div class="rank-laps">${lane.laps}</div>
+            <div class="rank-meters">voltas</div>
+          `;
+          els.ranking.appendChild(row);
+        });
+        flashLanes.clear();
+      }
+
+      function computeBateriaResults() {
+        const participants = latestState.lanes.filter((lane) => lane.participant_name);
+        const finished = participants
+          .filter((lane) => lane.finish_at)
+          .sort((a, b) => a.race_time_ms - b.race_time_ms);
+        const running = participants.filter((lane) => !lane.finish_at);
+        return [...finished, ...running];
+      }
+
+      function renderBateria() {
+        if (!latestState || !latestState.competition) {
+          els.name.textContent = "Aguardando competição";
+          els.ranking.innerHTML = '<p class="muted">Aguardando competição...</p>';
+          els.banner.hidden = true;
+          return;
+        }
+        const competition = latestState.competition;
+        els.name.textContent = competition.name;
+        els.rankingTitle.textContent = "Resultados";
+
+        if (competition.status === "finished") {
+          els.banner.hidden = false;
+          if (!frozenResults) frozenResults = computeBateriaResults();
+        } else {
+          els.banner.hidden = true;
+          frozenResults = null;
+        }
+
+        const rows = frozenResults || computeBateriaResults();
+        if (!rows.length) {
+          els.ranking.innerHTML = '<p class="muted">Nenhum participante.</p>';
+          return;
+        }
+
+        const table = document.createElement("table");
+        table.className = "results-table";
+        table.innerHTML = `
+          <thead>
+            <tr><th>Pos</th><th>Nome</th><th>Equipe</th><th>Tempo</th><th>Velocidade</th></tr>
+          </thead>
+          <tbody></tbody>
+        `;
+        const tbody = table.querySelector("tbody");
+
+        rows.forEach((lane, index) => {
+          const finished = Boolean(lane.finish_at);
+          const position = finished ? index + 1 : null;
+          const posClass = position && position <= 3 ? ` pos-${position}` : "";
+          const time = finished ? formatRaceTime(lane.race_time_ms) : "⏱ em prova";
+          const speed = finished && lane.speed_ms != null ? `${lane.speed_ms} m/s` : "—";
+          const row = document.createElement("tr");
+          if (finished && position <= 3) row.classList.add(`podium-${position}`);
+          row.innerHTML = `
+            <td class="results-pos${posClass}">${position ? position + "º" : "—"}</td>
+            <td>${lane.participant_name}</td>
+            <td class="muted">${lane.team || "—"}</td>
+            <td class="results-time">${time}</td>
+            <td class="muted">${speed}</td>
+          `;
+          tbody.appendChild(row);
+        });
+
+        els.ranking.innerHTML = "";
+        els.ranking.appendChild(table);
+      }
+
+      function render() {
+        if (isBateria()) {
+          renderBateria();
+        } else {
+          renderMaratona();
+        }
+      }
+
+      const ws = new WSClient(wsUrl(), (message) => {
+        if (message.type === "state") {
+          latestState = message;
+          if (message.timer) {
+            timerState = message.timer;
+            clockAnchor = { at: Date.now(), elapsed: message.timer.elapsed_s || 0 };
+          }
+          updateClock();
+          render();
+        } else if (message.type === "tick") {
+          timerState = message;
+          clockAnchor = { at: Date.now(), elapsed: message.elapsed_s || 0 };
+          updateClock();
+        } else if (message.type === "lap") {
+          flashLanes.add(message.lane_id);
+        }
+      });
+
+      ws.onStatusChange = (connected) => {
+        els.badge.classList.toggle("online", connected);
+        els.badge.classList.toggle("offline", !connected);
+        els.badge.textContent = connected ? "online" : "offline";
+      };
+
+      setInterval(updateClock, 100);
+      updateClock();
+      ws.connect();
+    </script>
+  </body>
+</html>

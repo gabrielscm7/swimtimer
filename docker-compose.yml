@@ -1,0 +1,12 @@
+version: "3.9"
+services:
+  app:
+    build: ./backend
+    ports: ["8080:8080"]
+    volumes:
+      - ./backend/data:/app/data
+      - ./frontend:/app/frontend
+    environment:
+      - FRONTEND_DIR=/app/frontend
+    env_file: .env
+    restart: unless-stopped

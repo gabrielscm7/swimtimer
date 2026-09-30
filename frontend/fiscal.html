@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#071019" />
+    <title>SwimTimer — Fiscal</title>
+    <link rel="stylesheet" href="/static/style.css" />
+  </head>
+  <body>
+    <main class="app">
+      <div class="topbar">
+        <div class="brand">Swim<span>Timer</span> · Fiscal</div>
+        <span class="badge offline" id="conn-badge">offline</span>
+      </div>
+
+      <div class="panel">
+        <h2>Minha raia</h2>
+        <label for="lane-select">Selecione o número da raia</label>
+        <select id="lane-select"></select>
+      </div>
+
+      <div class="panel center" id="lane-card">
+        <h2 id="lane-title">Raia —</h2>
+        <div class="clock small" id="lane-laps">0</div>
+        <p class="muted" id="lane-detail">Aguardando competição</p>
+      </div>
+
+      <div class="actions">
+        <button class="primary big" id="btn-register" disabled>REGISTRAR</button>
+        <button class="danger" id="btn-undo" disabled>DESFAZER (30s)</button>
+      </div>
+
+      <div class="panel" style="margin-top: 16px">
+        <h2>Contadores</h2>
+        <div class="list" id="counters"></div>
+      </div>
+    </main>
+
+    <script src="/static/app.js"></script>
+    <script src="/static/fiscal.js"></script>
+  </body>
+</html>
