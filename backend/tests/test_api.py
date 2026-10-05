@@ -1,165 +1,155 @@
 import asyncio
-import time
 
 import pytest
 
-import app.main as main_module
-from tests.conftest import create_competition_with_lanes
-
-
-async def create_bateria_with_participants(
-    client,
-    distance_m: int = 25,
-    participants: int = 1,
-) -> tuple[dict, list[dict]]:
-    response = await client.post(
-        "/api/competition",
-        json={
-            "name": "Bateria Teste",
-            "duration_s": 3600,
-            "meters_lap": 25,
-            "event_type": "bateria",
-            "distance_m": distance_m,
-        },
-    )
-    assert response.status_code == 201, response.text
-    competition = response.json()
-    state = (await client.get("/api/competition/current")).json()
-    lanes = state["lanes"][:participants]
-    for lane in lanes:
-        assign = await client.post(
-            f"/api/lane/{lane['id']}/assign",
-            json={"team_id": None, "participant_name": f"Atleta {lane['number']}"},
-        )
-        assert assign.status_code == 200, assign.text
-    return competition, lanes
+from tests.conftest import (
+    configure_lanes,
+    create_event,
+    create_heat,
+    ready_all,
+    setup_bateria,
+)
 
 
 @pytest.mark.asyncio
 async def test_health(client):
     response = await client.get("/api/health")
     assert response.status_code == 200
-    assert response.json() == {"status": "ok", "version": "1.0.0"}
+    assert response.json() == {"status": "ok", "version": "2.0.0"}
 
 
 @pytest.mark.asyncio
-async def test_create_competition(client):
-    response = await client.post(
-        "/api/competition",
-        json={"name": "Festival Infantil SESI", "duration_s": 10800, "meters_lap": 25},
+async def test_status(client):
+    response = await client.get("/api/status")
+    assert response.status_code == 200
+    body = response.json()
+    assert "uptime" in body
+    assert "connected_clients" in body
+    assert "active_heats" in body
+
+
+@pytest.mark.asyncio
+async def test_full_heat_flow_bateria(client):
+    event, heat = await setup_bateria(
+        client, [(1, "Ana"), (2, "Bia"), (3, "Caio")]
     )
-    assert response.status_code == 201
-    body = response.json()
-    assert body["name"] == "Festival Infantil SESI"
-    assert body["status"] == "draft"
-    assert body["duration_s"] == 10800
-    assert body["meters_lap"] == 25
-    assert body["id"]
+    assert heat["status"] == "ready_check"
+
+    await ready_all(client, heat)
+
+    start = await client.post(f"/api/heats/{heat['id']}/start")
+    assert start.status_code == 200, start.text
+    assert start.json()["status"] == "active"
+
+    await asyncio.sleep(0.02)
+
+    for lane in heat["heat_lanes"]:
+        finish = await client.post(f"/api/lanes/{lane['id']}/finish")
+        assert finish.status_code == 200, finish.text
+
+    result = await client.get(f"/api/events/{event['id']}/heats")
+    final = result.json()[0]
+    assert final["status"] == "finished"
+    for lane in final["heat_lanes"]:
+        assert lane["race_time_ms"] > 0
+        assert lane["race_time_display"]
+        assert lane["speed_ms"] is not None
 
 
 @pytest.mark.asyncio
-async def test_register_lap_uses_server_timestamp(client):
-    _competition, lanes = await create_competition_with_lanes(client)
-    lane_id = lanes[0]["id"]
+async def test_start_blocked_until_all_ready(client):
+    _event, heat = await setup_bateria(
+        client, [(1, "Ana"), (2, "Bia"), (3, "Caio")]
+    )
 
-    before = time.time()
-    response = await client.post(f"/api/lane/{lane_id}/lap")
-    after = time.time()
+    for lane in heat["heat_lanes"][:2]:
+        response = await client.post(f"/api/lanes/{lane['id']}/ready")
+        assert response.status_code == 200, response.text
 
-    assert response.status_code == 200
-    body = response.json()
-    assert body["lane_id"] == lane_id
-    assert body["lap_number"] == 1
-    assert body["is_undo"] is False
-    assert before <= body["recorded_at"] <= after
-
-    state = await client.get("/api/competition/current")
-    lane = next(item for item in state.json()["lanes"] if item["id"] == lane_id)
-    assert lane["laps"] == 1
-    assert lane["meters"] == 25
-    assert lane["status"] == "active"
-
-
-@pytest.mark.asyncio
-async def test_undo_lap_within_30s(client):
-    _competition, lanes = await create_competition_with_lanes(client)
-    lane_id = lanes[0]["id"]
-
-    await client.post(f"/api/lane/{lane_id}/lap")
-    response = await client.delete(f"/api/lane/{lane_id}/lap/last")
-
-    assert response.status_code == 200
-    body = response.json()
-    assert body["status"] == "undone"
-    assert body["laps"] == 0
-
-
-@pytest.mark.asyncio
-async def test_undo_lap_after_30s(client, monkeypatch):
-    _competition, lanes = await create_competition_with_lanes(client)
-    lane_id = lanes[0]["id"]
-
-    await client.post(f"/api/lane/{lane_id}/lap")
-
-    future = time.time() + 31
-    monkeypatch.setattr(main_module.time, "time", lambda: future)
-
-    response = await client.delete(f"/api/lane/{lane_id}/lap/last")
+    pending_lane = heat["heat_lanes"][2]
+    response = await client.post(f"/api/heats/{heat['id']}/start")
     assert response.status_code == 400
-    assert response.json()["detail"] == "fora_do_prazo"
+    detail = response.json()["detail"]
+    assert "raias_pendentes" in detail
+    assert str(pending_lane["lane_number"]) in detail
 
 
 @pytest.mark.asyncio
-async def test_bateria_finish_registers_time(client):
-    competition, lanes = await create_bateria_with_participants(
-        client, distance_m=25
-    )
-    await client.post(f"/api/competition/{competition['id']}/start")
+async def test_no_double_finish(client):
+    _event, heat = await setup_bateria(client, [(1, "Ana")])
+    await ready_all(client, heat)
+
+    await client.post(f"/api/heats/{heat['id']}/start")
     await asyncio.sleep(0.02)
 
-    response = await client.post(f"/api/lane/{lanes[0]['id']}/finish")
-    assert response.status_code == 200, response.text
-    body = response.json()
-
-    assert body["race_time_ms"] > 0
-    assert body["speed_ms"] == round(25000 / body["race_time_ms"], 2)
-    assert body["race_time_display"]
-    assert body["participant_name"] == "Atleta 1"
-
-
-@pytest.mark.asyncio
-async def test_bateria_no_double_finish(client):
-    competition, lanes = await create_bateria_with_participants(client)
-    await client.post(f"/api/competition/{competition['id']}/start")
-    await asyncio.sleep(0.02)
-
-    first = await client.post(f"/api/lane/{lanes[0]['id']}/finish")
+    lane_id = heat["heat_lanes"][0]["id"]
+    first = await client.post(f"/api/lanes/{lane_id}/finish")
     assert first.status_code == 200
 
-    second = await client.post(f"/api/lane/{lanes[0]['id']}/finish")
+    second = await client.post(f"/api/lanes/{lane_id}/finish")
     assert second.status_code == 409
     assert second.json()["detail"] == "ja_finalizou"
 
 
 @pytest.mark.asyncio
-async def test_bateria_auto_finish_when_all_done(client):
-    competition, lanes = await create_bateria_with_participants(
-        client, participants=2
-    )
-    await client.post(f"/api/competition/{competition['id']}/start")
+async def test_dq_counts_as_finish(client):
+    event, heat = await setup_bateria(client, [(1, "Ana"), (2, "Bia")])
+    await ready_all(client, heat)
+
+    await client.post(f"/api/heats/{heat['id']}/start")
     await asyncio.sleep(0.02)
 
-    await client.post(f"/api/lane/{lanes[0]['id']}/finish")
-    await client.post(f"/api/lane/{lanes[1]['id']}/finish")
+    first, second = heat["heat_lanes"]
+    finish = await client.post(f"/api/lanes/{first['id']}/finish")
+    assert finish.status_code == 200
 
-    state = await client.get("/api/competition/current")
-    assert state.json()["competition"]["status"] == "finished"
+    dq = await client.post(f"/api/lanes/{second['id']}/dq")
+    assert dq.status_code == 200
+
+    result = await client.get(f"/api/events/{event['id']}/heats")
+    assert result.json()[0]["status"] == "finished"
 
 
 @pytest.mark.asyncio
-async def test_bateria_finish_rejected_before_start(client):
-    _competition, lanes = await create_bateria_with_participants(client)
+async def test_maratona_lap_and_undo(client):
+    event = await create_event(client, pool_length_m=25)
+    heat = await create_heat(
+        client,
+        event["id"],
+        heat_type="maratona",
+        distance_m=None,
+        duration_s=10800,
+    )
+    heat = await configure_lanes(client, heat["id"], [(1, "Ana")])
+    await client.post(f"/api/heats/{heat['id']}/open-ready-check")
 
-    response = await client.post(f"/api/lane/{lanes[0]['id']}/finish")
-    assert response.status_code == 400
-    assert response.json()["detail"] == "competicao_nao_ativa"
+    lane_id = heat["heat_lanes"][0]["id"]
+    await client.post(f"/api/lanes/{lane_id}/ready")
+    await client.post(f"/api/heats/{heat['id']}/start")
+
+    lap = await client.post(f"/api/lanes/{lane_id}/lap")
+    assert lap.status_code == 200, lap.text
+    assert lap.json()["lap_number"] == 1
+
+    result = await client.get(f"/api/events/{event['id']}/heats")
+    lane = result.json()[0]["heat_lanes"][0]
+    assert lane["laps"] == 1
+    assert lane["meters"] == 25
+
+    undo = await client.delete(f"/api/lanes/{lane_id}/lap/last")
+    assert undo.status_code == 200
+
+    result = await client.get(f"/api/events/{event['id']}/heats")
+    assert result.json()[0]["heat_lanes"][0]["laps"] == 0
+
+
+@pytest.mark.asyncio
+async def test_event_delete_only_when_draft(client):
+    event = await create_event(client)
+    deleted = await client.delete(f"/api/events/{event['id']}")
+    assert deleted.status_code == 204
+
+    event = await create_event(client, name="Evento Ativo")
+    await client.patch(f"/api/events/{event['id']}", json={"status": "active"})
+    blocked = await client.delete(f"/api/events/{event['id']}")
+    assert blocked.status_code == 409

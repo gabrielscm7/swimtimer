@@ -3,39 +3,288 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#071019" />
+    <meta name="theme-color" content="#0f1117" />
     <title>SwimTimer — Fiscal</title>
     <link rel="stylesheet" href="/static/style.css" />
+    <style>
+      .fiscal-app {
+        max-width: 480px;
+        margin: 0 auto;
+        padding: 14px 14px 40px;
+        min-height: 100vh;
+      }
+      .fiscal-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        margin-bottom: 14px;
+      }
+      .fiscal-header .brand {
+        font-size: 1.05rem;
+      }
+      .fiscal-header-meta {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-end;
+        gap: 2px;
+        font-size: 0.8rem;
+      }
+      .fiscal-card {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        padding: 16px;
+        margin-bottom: 14px;
+      }
+      .fiscal-lane-number {
+        font-size: 2.6rem;
+        font-weight: 800;
+        color: var(--cyan);
+        line-height: 1.1;
+      }
+      .fiscal-clock {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-variant-numeric: tabular-nums;
+        font-size: 64px;
+        font-weight: 700;
+        color: var(--cyan);
+        text-align: center;
+        letter-spacing: 1px;
+        margin: 18px 0;
+      }
+      .fiscal-btn-primary {
+        display: block;
+        width: 100%;
+        min-height: 72px;
+        font-size: 1.15rem;
+        font-weight: 700;
+        border-radius: 14px;
+        margin-bottom: 12px;
+      }
+      .fiscal-btn-finish {
+        min-height: 88px;
+        font-size: 1.35rem;
+        background: linear-gradient(180deg, #33ddff, var(--cyan));
+        color: #04202b;
+        border: none;
+      }
+      .fiscal-btn-finish:disabled {
+        opacity: 0.6;
+      }
+      .fiscal-btn-ghost {
+        background: transparent;
+        border: 1px solid var(--border);
+        color: var(--muted);
+      }
+      .fiscal-btn-danger-outline {
+        border-color: rgba(239, 68, 68, 0.6);
+        color: #f87171;
+      }
+      .fiscal-lane-grid {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 8px;
+      }
+      .fiscal-lane-grid button {
+        padding: 18px 0;
+        font-size: 1.2rem;
+        font-weight: 700;
+      }
+      .fiscal-lane-grid button.selected {
+        background: linear-gradient(180deg, var(--cyan), var(--cyan-strong));
+        color: #04202b;
+        border: none;
+      }
+      .fiscal-lane-status {
+        display: grid;
+        gap: 8px;
+      }
+      .fiscal-lane-status .lane-line {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 12px;
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        background: var(--row-bg);
+        font-size: 0.95rem;
+      }
+      .fiscal-spinner {
+        display: inline-block;
+        width: 16px;
+        height: 16px;
+        border: 2px solid var(--border);
+        border-top-color: var(--cyan);
+        border-radius: 50%;
+        animation: fiscal-spin 0.9s linear infinite;
+        vertical-align: middle;
+        margin-right: 6px;
+      }
+      @keyframes fiscal-spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+      .fiscal-footer {
+        text-align: center;
+        margin-top: 16px;
+      }
+      .fiscal-link {
+        background: none;
+        border: none;
+        color: var(--muted);
+        text-decoration: underline;
+        font-size: 0.85rem;
+        padding: 8px;
+      }
+      .fiscal-offline {
+        position: sticky;
+        top: 0;
+        z-index: 40;
+        background: #7f1d1d;
+        color: #fee2e2;
+        text-align: center;
+        padding: 8px 12px;
+        border-radius: 10px;
+        font-size: 0.85rem;
+        font-weight: 600;
+        margin-bottom: 12px;
+      }
+      .fiscal-note {
+        color: var(--muted);
+        font-size: 0.85rem;
+        margin-top: 8px;
+      }
+    </style>
   </head>
   <body>
-    <main class="app">
-      <div class="topbar">
-        <div class="brand">Swim<span>Timer</span> · Fiscal</div>
-        <span class="badge offline" id="conn-badge">offline</span>
+    <main class="fiscal-app">
+      <div class="fiscal-offline" id="offline-banner" hidden>
+        Sem conexão — registros em fila
       </div>
 
-      <div class="panel">
-        <h2>Minha raia</h2>
-        <label for="lane-select">Selecione o número da raia</label>
-        <select id="lane-select"></select>
+      <div class="fiscal-header">
+        <div class="brand">Swim<span>Timer</span></div>
+        <div class="fiscal-header-meta">
+          <span class="muted" id="hdr-event">Fiscal</span>
+          <span class="dot offline" id="hdr-dot"></span>
+        </div>
       </div>
 
-      <div class="panel center" id="lane-card">
-        <h2 id="lane-title">Raia —</h2>
-        <div class="clock small" id="lane-laps">0</div>
-        <p class="muted" id="lane-detail">Aguardando competição</p>
-      </div>
+      <!-- TELA 1 — CONFIGURAÇÃO -->
+      <section id="screen-config" class="fiscal-screen">
+        <div class="fiscal-card">
+          <label for="fs-event">Qual evento?</label>
+          <select id="fs-event"></select>
+        </div>
+        <div class="fiscal-card" id="fs-lane-card" hidden>
+          <label>Qual é a sua raia?</label>
+          <div class="fiscal-lane-grid" id="fs-lane-grid"></div>
+          <div class="fiscal-note" id="fs-preview"></div>
+        </div>
+        <button class="fiscal-btn-primary primary" id="fs-confirm" disabled>
+          CONFIRMAR POSIÇÃO
+        </button>
+      </section>
 
-      <div class="actions">
-        <button class="primary big" id="btn-register" disabled>REGISTRAR</button>
-        <button class="danger" id="btn-undo" disabled>DESFAZER (30s)</button>
-      </div>
+      <!-- TELA 2 — AGUARDANDO BATERIA -->
+      <section id="screen-waiting" class="fiscal-screen" hidden>
+        <div class="fiscal-card">
+          <div class="fiscal-lane-number" id="fw-lane">RAIA —</div>
+          <div id="fw-participant" class="muted">—</div>
+          <div class="fiscal-note" id="fw-team"></div>
+        </div>
+        <div class="fiscal-card">
+          <div id="fw-heat-name"><strong>—</strong></div>
+          <div class="fiscal-note" id="fw-heat-info"></div>
+        </div>
+        <button class="fiscal-btn-primary primary" id="fw-ready" disabled>
+          AGUARDANDO CHAMADA
+        </button>
+        <div class="fiscal-footer">
+          <button class="fiscal-link" data-action="change-lane">Trocar raia</button>
+        </div>
+      </section>
 
-      <div class="panel" style="margin-top: 16px">
-        <h2>Contadores</h2>
-        <div class="list" id="counters"></div>
-      </div>
+      <!-- TELA 3 — AGUARDANDO OUTROS FISCAIS -->
+      <section id="screen-ready" class="fiscal-screen" hidden>
+        <div class="fiscal-card center">
+          <div style="font-size: 2rem">✅</div>
+          <div><strong>Você está pronto</strong></div>
+          <div class="fiscal-note" id="fr-participant"></div>
+        </div>
+        <div class="fiscal-card">
+          <label>Status das raias</label>
+          <div class="fiscal-lane-status" id="fr-lanes"></div>
+        </div>
+        <div class="center muted">
+          <span class="fiscal-spinner"></span>Aguardando supervisor iniciar a prova
+        </div>
+        <div class="fiscal-footer">
+          <button class="fiscal-link" data-action="change-lane">Trocar raia</button>
+        </div>
+      </section>
+
+      <!-- TELA 4 — EM PROVA -->
+      <section id="screen-racing" class="fiscal-screen" hidden>
+        <div class="center">
+          <div id="fc-participant"><strong>—</strong></div>
+          <div class="fiscal-note" id="fc-team"></div>
+        </div>
+        <div class="fiscal-clock" id="fc-clock">00:00.0</div>
+        <div class="center fiscal-note" id="fc-lap-info"></div>
+        <button class="fiscal-btn-primary fiscal-btn-finish" id="fc-register">
+          ✋ REGISTRAR CHEGADA
+        </button>
+        <button class="fiscal-btn-primary fiscal-btn-ghost" id="fc-undo" hidden>
+          ↩ Desfazer última volta
+        </button>
+        <button
+          class="fiscal-btn-primary fiscal-btn-ghost fiscal-btn-danger-outline"
+          id="fc-dq"
+        >
+          🚫 DESCLASSIFICAR
+        </button>
+        <div class="fiscal-footer">
+          <button class="fiscal-link" data-action="change-lane">Trocar raia</button>
+        </div>
+      </section>
+
+      <!-- TELA 5 — FINALIZADO -->
+      <section id="screen-finished" class="fiscal-screen" hidden>
+        <div class="fiscal-card center">
+          <div style="font-size: 2.4rem" id="ff-icon">✅</div>
+          <div id="ff-title"><strong>FINALIZADO</strong></div>
+          <div id="ff-participant"></div>
+          <div class="fiscal-note" id="ff-team"></div>
+          <div class="fiscal-clock" id="ff-time" style="font-size: 46px">—</div>
+          <div class="fiscal-note" id="ff-speed"></div>
+        </div>
+        <div class="fiscal-card">
+          <label>Outras raias</label>
+          <div class="fiscal-lane-status" id="ff-lanes"></div>
+        </div>
+        <div class="banner-finished" id="ff-banner" hidden>🏁 Bateria encerrada</div>
+        <button class="fiscal-btn-primary primary" id="ff-next" hidden>
+          Próxima bateria
+        </button>
+        <div class="fiscal-footer">
+          <button class="fiscal-link" data-action="change-lane">Trocar raia</button>
+        </div>
+      </section>
     </main>
+
+    <div class="modal-overlay" id="dq-modal">
+      <div class="modal">
+        <h2>Confirmar desclassificação</h2>
+        <p class="muted" id="dq-text">Tem certeza?</p>
+        <div class="row" style="margin-top: 12px">
+          <button style="flex: 1" id="dq-cancel">Cancelar</button>
+          <button style="flex: 1" class="danger" id="dq-confirm">Confirmar DQ</button>
+        </div>
+      </div>
+    </div>
 
     <script src="/static/app.js"></script>
     <script src="/static/fiscal.js"></script>

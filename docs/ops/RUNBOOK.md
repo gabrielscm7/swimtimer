@@ -5,52 +5,42 @@ Siga esta sequência. Tempo estimado do passo 1 ao sistema pronto: **5 minutos**
 
 ---
 
-## 30 minutos antes
+# Sequência de início (dia do evento)
 
-### 1. Ligar o notebook e iniciar o hotspot
+## 1. Ativar hotspot (se necessário)
+./hotspot.sh start
 
-```bash
-nmcli device wifi hotspot ssid "SwimTimer" password "swim2025" ifname wlan0
-```
-
-Confirma: `ip addr show | grep "10.42"` deve mostrar `10.42.0.1`
-
-### 2. Iniciar o servidor
-
-```bash
-cd ~/swimtimer
+## 2. Iniciar o servidor
 ./start.sh
-```
+→ Escolher "s" para ver logs, ou "N" para liberar o terminal
 
-O terminal mostra:
-```
-✅ Backup do banco criado: backup_2026-10-15_09-30.db
-✅ SwimTimer rodando em http://10.42.0.1:8080
-📺 Dashboard: http://10.42.0.1:8080/dashboard.html
-📱 Fiscal:    http://10.42.0.1:8080/fiscal.html
-⚙️  Admin:     http://10.42.0.1:8080/admin.html
-```
+## 3. Verificar acesso
+Abrir http://10.42.0.1:8080 no notebook → deve carregar a Home
 
-### 3. Configurar a competição (admin)
+## 4. Compartilhar acesso com fiscais
+Mostrar o QR Code exibido no terminal
+OU passar a URL: http://10.42.0.1:8080/fiscal.html
 
-- Abra `http://10.42.0.1:8080/admin.html` no notebook
+## 5. Encerrar ao fim do evento
+./stop.sh
+./hotspot.sh stop
+
+---
+
+## Preparar a competição
+
+### Configurar a competição (gestão)
+
+- Abra `http://10.42.0.1:8080/gestao.html` no notebook
 - Crie ou selecione a competição do dia
 - Confirme que equipes e raias estão configuradas
 
-### 4. Abrir o dashboard no telão
+### Abrir o painel público no telão
 
 - Conecte o HDMI na TV
-- Abra `http://10.42.0.1:8080/dashboard.html` no Chrome
+- Abra `http://10.42.0.1:8080/publico.html` no Chrome
 - Pressione F11 (tela cheia)
 - Pressione F11 novamente para sair quando necessário
-
-### 5. Orientar os fiscais
-
-Cada fiscal:
-1. Conecta o celular no Wi-Fi **SwimTimer** (senha: `swim2025`)
-2. Abre o Chrome e digita: `http://10.42.0.1:8080/fiscal.html`
-3. Seleciona o número da sua raia
-4. Aguarda o sinal de início
 
 ---
 
@@ -58,18 +48,18 @@ Cada fiscal:
 
 ### Iniciar a prova
 
-- No admin: clique em **Iniciar** → cronômetro começa → fiscais habilitados
+- Na gestão: clique em **Iniciar** → cronômetro começa → fiscais habilitados
 
 ### Registrar chegada (fiscal)
 
 1. Atleta chega → fiscal toca **REGISTRAR**
 2. Flash verde = registrado com sucesso
-3. Dashboard atualiza em < 1 segundo
+3. Painel público atualiza em < 1 segundo
 
 ### Desfazer erro (fiscal)
 
 - Botão **DESFAZER** disponível por 30 segundos após o toque
-- Após 30s: solicitar ao operador-geral via admin
+- Após 30s: solicitar ao operador-geral via gestão
 
 ### Monitorar conexões
 
@@ -81,13 +71,16 @@ Cada fiscal:
 ## Encerrar o evento
 
 ```bash
-# No terminal onde o servidor está rodando:
-Ctrl+C
+./stop.sh
+./hotspot.sh stop
+```
 
-# Confirma que os dados estão salvos:
-ls -la ~/swimtimer/data/
+Confirma que os dados estão salvos:
+
+```bash
+ls -la backend/data/
 # swimtimer.db   ← banco com todos os dados
-# backup_*.db    ← backups automáticos
+# backups/       ← backups automáticos (10 mais recentes)
 ```
 
 ---
@@ -99,6 +92,6 @@ ls -la ~/swimtimer/data/
 | Celular não acessa a URL | Não está na rede SwimTimer | Verificar Wi-Fi do celular |
 | Badge vermelho em todos os fiscais | Servidor caiu | `./start.sh` no terminal |
 | Servidor não sobe (`porta em uso`) | Processo anterior não encerrou | `docker compose down && ./start.sh` |
-| Dashboard não atualiza | Navegador com WS bloqueado | Recarregar página (F5) |
-| Hotspot sumiu | NetworkManager reiniciou | Repetir comando `nmcli device wifi hotspot...` |
+| Painel público não atualiza | Navegador com WS bloqueado | Recarregar página (F5) |
+| Hotspot sumiu | NetworkManager reiniciou | `./hotspot.sh start` |
 | Dados perdidos após crash | Nunca — SQLite persiste em disco | Reiniciar servidor; dados já estão lá |

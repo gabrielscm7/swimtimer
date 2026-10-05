@@ -39,17 +39,17 @@
       </div>
 
       <div class="panel">
-        <h2 id="competition-name" class="center">Maratona Aquática</h2>
+        <h2 id="heat-name" class="center">Aguardando prova</h2>
         <div class="banner-finished" id="finished-banner" hidden>🏆 PROVA ENCERRADA</div>
-        <div class="dashboard-clock-label">Tempo decorrido</div>
+        <div class="dashboard-clock-label">Tempo</div>
         <div class="clock" id="clock">00:00:00</div>
-        <div class="remaining" id="remaining">restante 00:00:00</div>
+        <div class="remaining" id="remaining"></div>
       </div>
 
       <div class="panel">
         <h2 id="ranking-title">Ranking em tempo real</h2>
         <div class="ranking" id="ranking">
-          <p class="muted">Aguardando competição...</p>
+          <p class="muted">Aguardando prova...</p>
         </div>
       </div>
     </main>
@@ -58,168 +58,163 @@
     <script>
       const els = {
         badge: document.getElementById("conn-badge"),
-        name: document.getElementById("competition-name"),
+        name: document.getElementById("heat-name"),
         banner: document.getElementById("finished-banner"),
-        rankingTitle: document.getElementById("ranking-title"),
         clock: document.getElementById("clock"),
         remaining: document.getElementById("remaining"),
+        rankingTitle: document.getElementById("ranking-title"),
         ranking: document.getElementById("ranking"),
       };
 
-      let latestState = null;
-      let timerState = { elapsed_s: 0, remaining_s: 0 };
-      let clockAnchor = { at: Date.now(), elapsed: 0 };
-      const flashLanes = new Set();
-      let frozenResults = null;
+      let events = [];
+      let currentHeat = null;
+      let currentEvent = null;
 
-      function isBateria() {
-        return (
-          latestState &&
-          latestState.competition &&
-          (latestState.competition.event_type || "maratona") === "bateria"
-        );
+      function pickCurrent() {
+        const active = [];
+        const ready = [];
+        for (const event of events) {
+          for (const heat of event.heats) {
+            if (heat.status === "active") active.push({ event, heat });
+            else if (heat.status === "ready_check") ready.push({ event, heat });
+          }
+        }
+        const chosen = active[0] || ready[0] || null;
+        if (chosen) {
+          currentEvent = chosen.event;
+          currentHeat = chosen.heat;
+        }
       }
 
-      function batteryElapsed() {
-        const competition = latestState && latestState.competition;
-        if (!competition) return 0;
-        if (competition.status === "finished" && competition.finished_at && competition.started_at) {
-          return competition.finished_at - competition.started_at;
+      function upsertHeat(heat) {
+        const event = events.find((item) => item.id === heat.event_id);
+        if (!event) return;
+        const index = event.heats.findIndex((item) => item.id === heat.id);
+        if (index >= 0) event.heats[index] = heat;
+        else event.heats.push(heat);
+        if (currentHeat && currentHeat.id === heat.id) {
+          currentHeat = heat;
+          currentEvent = event;
         }
-        if (competition.status !== "active") return 0;
-        return clockAnchor.elapsed + (Date.now() - clockAnchor.at) / 1000;
+      }
+
+      function elapsed() {
+        if (!currentHeat || !currentHeat.started_at) return 0;
+        const end = currentHeat.finished_at || Date.now() / 1000;
+        return Math.max(0, end - currentHeat.started_at);
       }
 
       function updateClock() {
-        if (isBateria()) {
-          els.clock.textContent = formatTenths(batteryElapsed());
-          els.remaining.style.display = "none";
+        if (!currentHeat) {
+          els.clock.textContent = "00:00:00";
+          els.remaining.textContent = "";
+          return;
+        }
+        const seconds = elapsed();
+        if (currentHeat.heat_type === "bateria") {
+          els.clock.textContent = formatTenths(seconds);
+          els.remaining.textContent = "";
         } else {
-          els.clock.textContent = formatClock(timerState.elapsed_s);
-          els.remaining.style.display = "";
-          els.remaining.textContent = `restante ${formatClock(timerState.remaining_s)}`;
+          els.clock.textContent = formatClock(seconds);
+          const remaining = Math.max(0, (currentHeat.duration_s || 0) - seconds);
+          els.remaining.textContent = `restante ${formatClock(remaining)}`;
         }
       }
 
-      function renderMaratona() {
-        els.banner.hidden = true;
-        els.rankingTitle.textContent = "Ranking em tempo real";
-        if (!latestState || !latestState.competition) {
-          els.name.textContent = "Aguardando competição";
-          els.ranking.innerHTML = '<p class="muted">Aguardando competição...</p>';
+      function render() {
+        if (!currentHeat) {
+          els.name.textContent = "Aguardando prova";
+          els.ranking.innerHTML = '<p class="muted">Aguardando prova...</p>';
+          els.banner.hidden = true;
+          currentHeat = null;
           return;
         }
-        els.name.textContent = latestState.competition.name;
-        const lanes = [...latestState.lanes].sort((a, b) => b.meters - a.meters);
+        const type = currentHeat.heat_type === "bateria" ? "bateria" : "maratona";
+        els.name.textContent = `${currentEvent.name} · ${currentHeat.name} (${type})`;
+        els.banner.hidden = currentHeat.status !== "finished";
 
+        const lanes = currentHeat.heat_lanes.filter(
+          (lane) => lane.participant_name || lane.team_id
+        );
+        if (type === "bateria") {
+          renderBateria(lanes);
+        } else {
+          renderMaratona(lanes);
+        }
+      }
+
+      function renderBateria(lanes) {
+        els.rankingTitle.textContent = "Resultados";
+        if (!lanes.length) {
+          els.ranking.innerHTML = '<p class="muted">Nenhum participante.</p>';
+          return;
+        }
+        const finished = lanes
+          .filter((lane) => lane.finish_at != null)
+          .sort((a, b) => a.race_time_ms - b.race_time_ms);
+        const others = lanes.filter((lane) => lane.finish_at == null);
+        const rows = [...finished, ...others];
+
+        const table = document.createElement("table");
+        table.className = "results-table";
+        table.innerHTML = `<thead><tr><th>Pos</th><th>Nome</th><th>Equipe</th><th>Tempo</th><th>Velocidade</th></tr></thead><tbody></tbody>`;
+        const tbody = table.querySelector("tbody");
+        rows.forEach((lane, index) => {
+          const isFinished = lane.finish_at != null;
+          const position = isFinished ? index + 1 : null;
+          const time = isFinished
+            ? lane.race_time_display || formatRaceTime(lane.race_time_ms)
+            : lane.status === "dq"
+              ? "DQ"
+              : "⏱ em prova";
+          const speed =
+            isFinished && lane.speed_ms != null ? `${lane.speed_ms} m/s` : "—";
+          const row = document.createElement("tr");
+          if (isFinished && position <= 3) row.classList.add(`podium-${position}`);
+          row.innerHTML = `<td class="results-pos">${position ? position + "º" : "—"}</td><td>${lane.participant_name || "—"}</td><td class="muted">${lane.team || "—"}</td><td class="results-time">${time}</td><td class="muted">${speed}</td>`;
+          tbody.appendChild(row);
+        });
         els.ranking.innerHTML = "";
-        lanes.forEach((lane, index) => {
+        els.ranking.appendChild(table);
+      }
+
+      function renderMaratona(lanes) {
+        els.rankingTitle.textContent = "Ranking em tempo real";
+        if (!lanes.length) {
+          els.ranking.innerHTML = '<p class="muted">Nenhuma equipe na prova.</p>';
+          return;
+        }
+        const ordered = [...lanes].sort((a, b) => b.meters - a.meters);
+        els.ranking.innerHTML = "";
+        ordered.forEach((lane, index) => {
           const row = document.createElement("div");
           row.className = "rank-row";
-          if (flashLanes.has(lane.id)) row.classList.add("flash");
           row.innerHTML = `
             <div class="rank-pos">${index + 1}º</div>
             <div>
-              <div class="rank-team">${lane.team || "Sem equipe"}</div>
-              <div class="rank-lane">raia ${lane.number} · ${lane.meters} m</div>
+              <div class="rank-team">${lane.team || lane.participant_name || "Sem equipe"}</div>
+              <div class="rank-lane">raia ${lane.lane_number} · ${lane.meters} m</div>
             </div>
             <div class="rank-laps">${lane.laps}</div>
             <div class="rank-meters">voltas</div>
           `;
           els.ranking.appendChild(row);
         });
-        flashLanes.clear();
       }
 
-      function computeBateriaResults() {
-        const participants = latestState.lanes.filter((lane) => lane.participant_name);
-        const finished = participants
-          .filter((lane) => lane.finish_at)
-          .sort((a, b) => a.race_time_ms - b.race_time_ms);
-        const running = participants.filter((lane) => !lane.finish_at);
-        return [...finished, ...running];
-      }
-
-      function renderBateria() {
-        if (!latestState || !latestState.competition) {
-          els.name.textContent = "Aguardando competição";
-          els.ranking.innerHTML = '<p class="muted">Aguardando competição...</p>';
-          els.banner.hidden = true;
-          return;
-        }
-        const competition = latestState.competition;
-        els.name.textContent = competition.name;
-        els.rankingTitle.textContent = "Resultados";
-
-        if (competition.status === "finished") {
-          els.banner.hidden = false;
-          if (!frozenResults) frozenResults = computeBateriaResults();
-        } else {
-          els.banner.hidden = true;
-          frozenResults = null;
-        }
-
-        const rows = frozenResults || computeBateriaResults();
-        if (!rows.length) {
-          els.ranking.innerHTML = '<p class="muted">Nenhum participante.</p>';
-          return;
-        }
-
-        const table = document.createElement("table");
-        table.className = "results-table";
-        table.innerHTML = `
-          <thead>
-            <tr><th>Pos</th><th>Nome</th><th>Equipe</th><th>Tempo</th><th>Velocidade</th></tr>
-          </thead>
-          <tbody></tbody>
-        `;
-        const tbody = table.querySelector("tbody");
-
-        rows.forEach((lane, index) => {
-          const finished = Boolean(lane.finish_at);
-          const position = finished ? index + 1 : null;
-          const posClass = position && position <= 3 ? ` pos-${position}` : "";
-          const time = finished ? formatRaceTime(lane.race_time_ms) : "⏱ em prova";
-          const speed = finished && lane.speed_ms != null ? `${lane.speed_ms} m/s` : "—";
-          const row = document.createElement("tr");
-          if (finished && position <= 3) row.classList.add(`podium-${position}`);
-          row.innerHTML = `
-            <td class="results-pos${posClass}">${position ? position + "º" : "—"}</td>
-            <td>${lane.participant_name}</td>
-            <td class="muted">${lane.team || "—"}</td>
-            <td class="results-time">${time}</td>
-            <td class="muted">${speed}</td>
-          `;
-          tbody.appendChild(row);
-        });
-
-        els.ranking.innerHTML = "";
-        els.ranking.appendChild(table);
-      }
-
-      function render() {
-        if (isBateria()) {
-          renderBateria();
-        } else {
-          renderMaratona();
-        }
+      async function loadEvents() {
+        events = await apiFetch("/api/events");
+        pickCurrent();
+        render();
+        updateClock();
       }
 
       const ws = new WSClient(wsUrl(), (message) => {
-        if (message.type === "state") {
-          latestState = message;
-          if (message.timer) {
-            timerState = message.timer;
-            clockAnchor = { at: Date.now(), elapsed: message.timer.elapsed_s || 0 };
-          }
-          updateClock();
+        if (message.type === "heat_state") {
+          upsertHeat(message.payload);
+          if (!currentHeat || currentHeat.id === message.payload.id) pickCurrent();
           render();
-        } else if (message.type === "tick") {
-          timerState = message;
-          clockAnchor = { at: Date.now(), elapsed: message.elapsed_s || 0 };
           updateClock();
-        } else if (message.type === "lap") {
-          flashLanes.add(message.lane_id);
         }
       });
 
@@ -230,7 +225,7 @@
       };
 
       setInterval(updateClock, 100);
-      updateClock();
+      loadEvents().catch(() => {});
       ws.connect();
     </script>
   </body>

@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#0f1117" />
+    <title>SwimTimer — Supervisor</title>
+    <link rel="stylesheet" href="/static/style.css" />
+    <style>
+      .sup-header {
+        position: sticky;
+        top: 0;
+        z-index: 30;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        flex-wrap: wrap;
+        padding: 12px 16px;
+        background: var(--panel);
+        border-bottom: 1px solid var(--border);
+      }
+      .sup-header-left,
+      .sup-header-right {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      .sup-header-left {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 2px;
+      }
+      .sup-layout {
+        display: grid;
+        grid-template-columns: 40% 60%;
+        gap: 16px;
+        max-width: 1200px;
+        margin: 0 auto;
+        padding: 16px;
+        align-items: start;
+      }
+      .sup-card {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        padding: 16px;
+        margin-bottom: 14px;
+      }
+      .sup-card h2 {
+        margin: 0 0 10px;
+        font-size: 1rem;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        color: var(--muted);
+      }
+      .sup-clock {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-variant-numeric: tabular-nums;
+        font-size: 48px;
+        font-weight: 700;
+        color: var(--cyan);
+        text-align: center;
+        letter-spacing: 1px;
+        margin: 14px 0;
+      }
+      .sup-lane-line {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 12px;
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        background: var(--row-bg);
+        margin-bottom: 8px;
+        font-size: 0.95rem;
+      }
+      .sup-lane-line .spacer {
+        flex: 1;
+      }
+      .sup-lane-line .time {
+        font-variant-numeric: tabular-nums;
+        font-weight: 700;
+        color: var(--cyan);
+      }
+      .sup-btn {
+        display: block;
+        width: 100%;
+        min-height: 60px;
+        font-size: 1.1rem;
+        font-weight: 700;
+        border-radius: 12px;
+        margin-bottom: 10px;
+      }
+      .sup-btn-blue {
+        background: linear-gradient(180deg, #60a5fa, #3b82f6);
+        color: #04202b;
+        border: none;
+      }
+      .sup-btn-green {
+        background: linear-gradient(180deg, #34d399, #10b981);
+        color: #04202b;
+        border: none;
+      }
+      .sup-btn-start {
+        min-height: 76px;
+        font-size: 1.3rem;
+      }
+      .sup-btn-ghost {
+        background: transparent;
+        border: 1px solid var(--border);
+        color: var(--muted);
+      }
+      .sup-heat-card {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        margin-bottom: 10px;
+        overflow: hidden;
+      }
+      .sup-heat-card.active {
+        border-color: var(--cyan);
+        animation: sup-pulse 1.5s ease-in-out infinite;
+      }
+      @keyframes sup-pulse {
+        0%,
+        100% {
+          box-shadow: 0 0 0 1px var(--cyan);
+        }
+        50% {
+          box-shadow: 0 0 0 4px rgba(0, 212, 255, 0.35);
+        }
+      }
+      .sup-heat-header {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 12px 14px;
+        cursor: pointer;
+      }
+      .sup-heat-header .spacer {
+        flex: 1;
+      }
+      .sup-heat-body {
+        padding: 0 14px 14px;
+        border-top: 1px solid var(--border);
+      }
+      .sup-heat-card.collapsed .sup-heat-body {
+        display: none;
+      }
+      .sup-lane-mini {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 0;
+        font-size: 0.9rem;
+        border-bottom: 1px solid var(--border);
+      }
+      .sup-lane-mini:last-child {
+        border-bottom: none;
+      }
+      .sup-lane-mini .spacer {
+        flex: 1;
+      }
+      .sup-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-variant-numeric: tabular-nums;
+      }
+      .sup-table th,
+      .sup-table td {
+        text-align: left;
+        padding: 8px 6px;
+        border-bottom: 1px solid var(--border);
+        font-size: 0.9rem;
+      }
+      .sup-table th {
+        color: var(--muted);
+        font-size: 0.7rem;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+      }
+      .sup-accordion-toggle {
+        display: none;
+        width: 100%;
+        margin-bottom: 12px;
+      }
+      .sup-winner {
+        color: var(--muted);
+        font-size: 0.9rem;
+      }
+      @media (max-width: 900px) {
+        .sup-layout {
+          grid-template-columns: 1fr;
+        }
+      }
+      @media (max-width: 600px) {
+        .sup-accordion-toggle {
+          display: block;
+        }
+        .sup-right.collapsed #sup-heats {
+          display: none;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header class="sup-header">
+      <div class="sup-header-left">
+        <div class="brand">Swim<span>Timer</span> · Supervisor</div>
+        <div class="muted" id="sup-event-name">—</div>
+      </div>
+      <div class="sup-header-center">
+        <span class="status-pill" id="sup-event-status">—</span>
+      </div>
+      <div class="sup-header-right">
+        <span class="dot offline" id="sup-dot"></span>
+        <span class="muted" id="sup-terminals">0 terminais online</span>
+        <a href="index.html">← Home</a>
+      </div>
+    </header>
+
+    <div class="sup-layout">
+      <section class="sup-left" id="sup-left"></section>
+
+      <section class="sup-right collapsed" id="sup-right">
+        <button class="sup-accordion-toggle" id="sup-right-toggle">
+          Ver todas as baterias ▼
+        </button>
+        <div id="sup-heats"></div>
+      </section>
+    </div>
+
+    <script src="/static/app.js"></script>
+    <script src="/static/supervisor.js"></script>
+  </body>
+</html>

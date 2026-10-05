@@ -8,6 +8,10 @@ class ConnectionManager:
         self.active_connections: list[WebSocket] = []
         self._lock = asyncio.Lock()
 
+    @property
+    def count(self) -> int:
+        return len(self.active_connections)
+
     async def connect(self, websocket: WebSocket) -> None:
         await websocket.accept()
         self.active_connections.append(websocket)

@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#0f1117" />
+    <title>SwimTimer — Gestão</title>
+    <link rel="stylesheet" href="/static/style.css" />
+  </head>
+  <body>
+    <main class="gestao-layout">
+      <aside class="sidebar" id="sidebar">
+        <div class="row between">
+          <div class="brand">Swim<span>Timer</span></div>
+          <button class="hamburger" id="btn-hamburger" aria-label="menu">☰</button>
+        </div>
+        <div class="sidebar-body">
+          <label for="event-name">Evento</label>
+          <input class="sidebar-name" id="event-name" />
+          <div style="margin: 10px 0">
+            <span class="status-pill" id="event-status">—</span>
+          </div>
+          <nav class="sidebar-nav">
+            <button data-section="overview" class="active">📋 Visão geral</button>
+            <button data-section="heats">🏊 Baterias</button>
+            <button data-section="teams">👥 Equipes</button>
+            <button data-section="settings">⚙️ Configurações</button>
+          </nav>
+          <a href="index.html">← Home</a>
+        </div>
+      </aside>
+
+      <section class="main-area" id="main">
+        <div id="section-overview" class="section"></div>
+        <div id="section-heats" class="section" hidden></div>
+        <div id="section-teams" class="section" hidden></div>
+        <div id="section-settings" class="section" hidden></div>
+      </section>
+    </main>
+
+    <script src="/static/app.js"></script>
+    <script src="/static/gestao.js"></script>
+  </body>
+</html>

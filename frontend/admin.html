@@ -15,51 +15,41 @@
       </div>
 
       <div class="panel">
-        <h2>Competição atual</h2>
-        <p id="competition-info" class="muted">Nenhuma competição</p>
-        <div class="clock small" id="clock">00:00:00</div>
+        <h2>Evento</h2>
+        <label for="event-select">Selecione o evento</label>
+        <select id="event-select"></select>
+        <p id="event-info" class="muted" style="margin-top: 8px">Nenhum evento</p>
+        <div class="actions">
+          <button id="btn-activate-event">ATIVAR EVENTO</button>
+          <button class="danger" id="btn-delete-event">EXCLUIR (draft)</button>
+        </div>
       </div>
 
       <div class="panel">
-        <h2>Criar competição</h2>
+        <h2>Criar evento</h2>
         <div class="grid">
           <div>
-            <label for="comp-name">Nome</label>
-            <input id="comp-name" type="text" placeholder="Festival Infantil SESI" />
-          </div>
-          <div>
-            <label for="comp-event">Tipo de evento</label>
-            <select id="comp-event">
-              <option value="maratona">Maratona Aquática</option>
-              <option value="bateria">Bateria Cronometrada</option>
-            </select>
+            <label for="ev-name">Nome</label>
+            <input id="ev-name" type="text" placeholder="Festival Infantil SESI" />
           </div>
           <div class="row">
             <div style="flex: 1">
-              <label for="comp-hours">Duração (horas)</label>
-              <input id="comp-hours" type="number" min="0.1" step="0.5" value="3" />
+              <label for="ev-location">Local</label>
+              <input id="ev-location" type="text" placeholder="Piscina SESI" />
             </div>
             <div style="flex: 1">
-              <label for="comp-meters">Metros por comprimento</label>
-              <select id="comp-meters">
-                <option value="25">25 m</option>
-                <option value="50" selected>50 m</option>
-              </select>
+              <label for="ev-date">Data</label>
+              <input id="ev-date" type="date" />
             </div>
           </div>
-          <div id="distance-field" hidden>
-            <label for="comp-distance">Distância da prova (m)</label>
-            <select id="comp-distance">
-              <option value="25">25</option>
-              <option value="50">50</option>
-              <option value="100">100</option>
-              <option value="200">200</option>
-              <option value="400">400</option>
-              <option value="800">800</option>
-              <option value="1500">1500</option>
+          <div>
+            <label for="ev-pool">Metros por comprimento</label>
+            <select id="ev-pool">
+              <option value="25">25 m</option>
+              <option value="50">50 m</option>
             </select>
           </div>
-          <button class="primary" id="btn-create-comp">Criar competição</button>
+          <button class="primary" id="btn-create-event">Criar evento</button>
         </div>
       </div>
 
@@ -73,102 +63,134 @@
       </div>
 
       <div class="panel">
-        <h2>Raias</h2>
-        <div class="lane-grid" id="lane-grid"></div>
+        <h2>Provas</h2>
+        <div class="row">
+          <input id="heat-name" type="text" placeholder="Nome da prova" />
+          <select id="heat-type">
+            <option value="bateria">Bateria</option>
+            <option value="maratona">Maratona</option>
+          </select>
+          <input id="heat-distance" type="number" min="25" step="25" value="25" placeholder="Distância (m)" />
+          <input id="heat-duration" type="number" min="0.1" step="0.5" value="3" placeholder="Duração (h)" hidden />
+          <button id="btn-add-heat">Adicionar</button>
+        </div>
+        <div class="list" id="heat-list" style="margin-top: 12px"></div>
       </div>
 
       <div class="panel">
-        <h2>Controle do cronômetro</h2>
+        <h2>Raias da prova selecionada</h2>
+        <p id="lane-heat-info" class="muted">Selecione uma prova.</p>
+        <div class="lane-grid" id="lane-grid"></div>
         <div class="actions">
-          <button class="primary" id="btn-start">INICIAR PROVA</button>
-          <button id="btn-pause">PAUSAR</button>
-          <button class="danger" id="btn-reset">ZERAR (senha)</button>
+          <button class="primary" id="btn-save-lanes">SALVAR RAIAS</button>
         </div>
       </div>
     </main>
-
-    <div class="modal-overlay" id="reset-modal">
-      <div class="modal">
-        <h2>Senha de reset</h2>
-        <input id="reset-password" type="password" placeholder="Senha" />
-        <div class="row" style="margin-top: 12px">
-          <button style="flex: 1" id="btn-reset-cancel">Cancelar</button>
-          <button style="flex: 1" class="danger" id="btn-reset-confirm">Zerar</button>
-        </div>
-      </div>
-    </div>
 
     <script src="/static/app.js"></script>
     <script>
       const els = {
         badge: document.getElementById("conn-badge"),
-        info: document.getElementById("competition-info"),
-        clock: document.getElementById("clock"),
-        name: document.getElementById("comp-name"),
-        event: document.getElementById("comp-event"),
-        hours: document.getElementById("comp-hours"),
-        meters: document.getElementById("comp-meters"),
-        distance: document.getElementById("comp-distance"),
-        distanceField: document.getElementById("distance-field"),
-        createComp: document.getElementById("btn-create-comp"),
+        eventSelect: document.getElementById("event-select"),
+        eventInfo: document.getElementById("event-info"),
+        activateEvent: document.getElementById("btn-activate-event"),
+        deleteEvent: document.getElementById("btn-delete-event"),
+        evName: document.getElementById("ev-name"),
+        evLocation: document.getElementById("ev-location"),
+        evDate: document.getElementById("ev-date"),
+        evPool: document.getElementById("ev-pool"),
+        createEvent: document.getElementById("btn-create-event"),
         teamName: document.getElementById("team-name"),
         addTeam: document.getElementById("btn-add-team"),
         teamList: document.getElementById("team-list"),
+        heatName: document.getElementById("heat-name"),
+        heatType: document.getElementById("heat-type"),
+        heatDistance: document.getElementById("heat-distance"),
+        heatDuration: document.getElementById("heat-duration"),
+        addHeat: document.getElementById("btn-add-heat"),
+        heatList: document.getElementById("heat-list"),
+        laneHeatInfo: document.getElementById("lane-heat-info"),
         laneGrid: document.getElementById("lane-grid"),
-        start: document.getElementById("btn-start"),
-        pause: document.getElementById("btn-pause"),
-        reset: document.getElementById("btn-reset"),
-        modal: document.getElementById("reset-modal"),
-        password: document.getElementById("reset-password"),
-        resetConfirm: document.getElementById("btn-reset-confirm"),
-        resetCancel: document.getElementById("btn-reset-cancel"),
+        saveLanes: document.getElementById("btn-save-lanes"),
       };
 
-      let latestState = null;
-      let timerState = { elapsed_s: 0, remaining_s: 0 };
+      const LANE_NUMBERS = [1, 2, 3, 4, 5, 6, 7, 8];
+      let events = [];
+      let selectedEventId = null;
+      let selectedHeatId = null;
 
-      async function api(path, options) {
-        const response = await fetch(path, {
-          headers: { "Content-Type": "application/json" },
-          ...options,
-        });
-        if (!response.ok) {
-          let detail = response.statusText;
-          try {
-            const body = await response.json();
-            detail = body.detail || detail;
-          } catch (error) {
-            /* noop */
-          }
-          throw new Error(detail);
+      function selectedEvent() {
+        return events.find((event) => event.id === selectedEventId) || null;
+      }
+
+      function selectedHeat() {
+        const event = selectedEvent();
+        if (!event) return null;
+        return event.heats.find((heat) => heat.id === selectedHeatId) || null;
+      }
+
+      async function refreshEvents() {
+        events = await apiFetch("/api/events");
+        if (!events.some((event) => event.id === selectedEventId)) {
+          selectedEventId = events.length ? events[0].id : null;
         }
-        if (response.status === 204) return null;
-        return response.json();
+        const event = selectedEvent();
+        if (!event || !event.heats.some((heat) => heat.id === selectedHeatId)) {
+          selectedHeatId = event && event.heats.length ? event.heats[0].id : null;
+        }
+        render();
       }
 
-      function renderClock() {
-        els.clock.textContent = formatClock(timerState.elapsed_s);
+      function applyHeatState(heat) {
+        const event = events.find((item) => item.id === heat.event_id);
+        if (!event) return;
+        const index = event.heats.findIndex((item) => item.id === heat.id);
+        if (index >= 0) event.heats[index] = heat;
+        else event.heats.push(heat);
+        event.heats.sort((a, b) => a.order_num - b.order_num);
+        render();
       }
 
-      function renderCompetition() {
-        if (!latestState || !latestState.competition) {
-          els.info.textContent = "Nenhuma competição";
+      function render() {
+        renderEventSelect();
+        renderEventInfo();
+        renderTeams();
+        renderHeats();
+        renderLanes();
+      }
+
+      function renderEventSelect() {
+        els.eventSelect.innerHTML = "";
+        if (!events.length) {
+          const option = document.createElement("option");
+          option.value = "";
+          option.textContent = "— sem eventos —";
+          els.eventSelect.appendChild(option);
+        }
+        for (const event of events) {
+          const option = document.createElement("option");
+          option.value = event.id;
+          option.textContent = `${event.name} (${event.status})`;
+          els.eventSelect.appendChild(option);
+        }
+        els.eventSelect.value = selectedEventId || "";
+      }
+
+      function renderEventInfo() {
+        const event = selectedEvent();
+        if (!event) {
+          els.eventInfo.textContent = "Nenhum evento";
           return;
         }
-        const comp = latestState.competition;
-        const hours = (comp.duration_s / 3600).toFixed(1);
-        const type = (comp.event_type || "maratona") === "bateria" ? "bateria" : "maratona";
-        let info = `${comp.name} · ${type} · status ${comp.status}`;
-        if (type === "bateria") {
-          info += ` · ${comp.distance_m} m`;
-        } else {
-          info += ` · ${hours} h · ${comp.meters_lap} m`;
-        }
-        els.info.textContent = info;
+        const parts = [`status ${event.status}`, `${event.pool_length_m} m`];
+        if (event.location) parts.push(event.location);
+        if (event.date) parts.push(event.date);
+        els.eventInfo.textContent = parts.join(" · ");
       }
 
       function renderTeams() {
-        const teams = (latestState && latestState.teams) || [];
+        const event = selectedEvent();
+        const teams = (event && event.teams) || [];
         els.teamList.innerHTML = "";
         if (!teams.length) {
           els.teamList.innerHTML = '<p class="muted">Nenhuma equipe cadastrada.</p>';
@@ -177,36 +199,102 @@
         for (const team of teams) {
           const item = document.createElement("div");
           item.className = "list-item";
-          item.innerHTML = `<span>${team.name}</span>`;
+          const label = document.createElement("span");
+          label.textContent = team.name;
+          const remove = document.createElement("button");
+          remove.textContent = "remover";
+          remove.className = "danger";
+          remove.addEventListener("click", () => removeTeam(team.id));
+          item.appendChild(label);
+          item.appendChild(remove);
           els.teamList.appendChild(item);
         }
       }
 
-      function isBateria() {
-        return (
-          latestState &&
-          latestState.competition &&
-          (latestState.competition.event_type || "maratona") === "bateria"
-        );
+      function renderHeats() {
+        const event = selectedEvent();
+        els.heatList.innerHTML = "";
+        if (!event || !event.heats.length) {
+          els.heatList.innerHTML = '<p class="muted">Nenhuma prova cadastrada.</p>';
+          return;
+        }
+        for (const heat of event.heats) {
+          const item = document.createElement("div");
+          item.className = "list-item";
+          const type = heat.heat_type === "bateria" ? "bateria" : "maratona";
+          const detail =
+            heat.heat_type === "bateria"
+              ? `${heat.distance_m} m`
+              : `${(heat.duration_s || 0) / 3600} h`;
+          const label = document.createElement("span");
+          label.innerHTML = `<strong>${heat.order_num}.</strong> ${heat.name} <span class="rank-lane">· ${type} · ${detail} · ${heat.status}</span>`;
+          const actions = document.createElement("span");
+
+          const select = document.createElement("button");
+          select.textContent = heat.id === selectedHeatId ? "selecionada" : "selecionar";
+          select.addEventListener("click", () => {
+            selectedHeatId = heat.id;
+            render();
+          });
+
+          actions.appendChild(select);
+          if (heat.status === "scheduled") {
+            actions.appendChild(actionButton("ready-check", () => heatAction(heat.id, "open-ready-check")));
+            actions.appendChild(actionButton("excluir", () => deleteHeat(heat.id), true));
+          } else if (heat.status === "ready_check") {
+            actions.appendChild(actionButton("iniciar", () => heatAction(heat.id, "start")));
+            actions.appendChild(actionButton("abortar", () => heatAction(heat.id, "abort"), true));
+          } else if (heat.status === "active") {
+            actions.appendChild(actionButton("abortar", () => heatAction(heat.id, "abort"), true));
+          }
+
+          item.appendChild(label);
+          item.appendChild(actions);
+          els.heatList.appendChild(item);
+        }
+      }
+
+      function actionButton(text, handler, danger = false) {
+        const button = document.createElement("button");
+        button.textContent = text;
+        if (danger) button.className = "danger";
+        button.addEventListener("click", handler);
+        return button;
       }
 
       function renderLanes() {
-        const lanes = (latestState && latestState.lanes) || [];
-        const teams = (latestState && latestState.teams) || [];
-        const battery = isBateria();
+        const heat = selectedHeat();
         els.laneGrid.innerHTML = "";
-        if (!lanes.length) {
-          els.laneGrid.innerHTML = '<p class="muted">Crie uma competição para gerar as raias.</p>';
+        if (!heat) {
+          els.laneHeatInfo.textContent = "Selecione uma prova.";
           return;
         }
-        for (const lane of lanes) {
+        els.laneHeatInfo.textContent = `${heat.name} · ${heat.heat_type} · ${heat.status}`;
+        const event = selectedEvent();
+        const teams = (event && event.teams) || [];
+        const lanesByNumber = {};
+        for (const lane of heat.heat_lanes) lanesByNumber[lane.lane_number] = lane;
+        const editable = heat.status === "scheduled" || heat.status === "ready_check";
+
+        for (const number of LANE_NUMBERS) {
+          const lane = lanesByNumber[number];
           const cell = document.createElement("div");
           cell.className = "lane-cell";
           const title = document.createElement("div");
           title.className = "lane-title";
-          title.textContent = `Raia ${lane.number} · ${lane.laps} voltas`;
+          title.textContent = `Raia ${number}${lane ? " · " + lane.status : ""}`;
+          cell.appendChild(title);
+
+          const participant = document.createElement("input");
+          participant.type = "text";
+          participant.placeholder = "Participante";
+          participant.dataset.lane = String(number);
+          participant.value = lane ? lane.participant_name || "" : "";
+          participant.disabled = !editable;
+          cell.appendChild(participant);
 
           const select = document.createElement("select");
+          select.dataset.lane = String(number);
           const empty = document.createElement("option");
           empty.value = "";
           empty.textContent = "— sem equipe —";
@@ -217,108 +305,218 @@
             option.textContent = team.name;
             select.appendChild(option);
           }
-          select.value = lane.team_id || "";
-
-          let participant = null;
-          if (battery) {
-            participant = document.createElement("input");
-            participant.type = "text";
-            participant.placeholder = "Nome do participante";
-            participant.value = lane.participant_name || "";
-            participant.addEventListener("change", () =>
-              assignLane(lane.id, select.value || null, participant.value)
-            );
-          }
-
-          select.addEventListener("change", () =>
-            assignLane(lane.id, select.value || null, participant ? participant.value : undefined)
-          );
-
-          cell.appendChild(title);
-          if (participant) cell.appendChild(participant);
+          select.value = lane && lane.team_id ? lane.team_id : "";
+          select.disabled = !editable;
           cell.appendChild(select);
+
+          if (lane && heat.status === "ready_check") {
+            const ready = actionButton(
+              lane.status === "ready" ? "pronto ✓" : "marcar pronto",
+              () => laneAction(lane.id, "ready")
+            );
+            cell.appendChild(ready);
+          }
+          if (lane && heat.status === "active") {
+            cell.appendChild(actionButton("DQ", () => laneAction(lane.id, "dq"), true));
+          }
           els.laneGrid.appendChild(cell);
         }
       }
 
-      function applyState(state) {
-        latestState = state;
-        if (state.timer) timerState = state.timer;
-        renderClock();
-        renderCompetition();
-        renderTeams();
-        renderLanes();
+      async function createEvent() {
+        const name = els.evName.value.trim();
+        if (!name) return showToast("Informe o nome do evento", true);
+        try {
+          await apiFetch("/api/events", {
+            method: "POST",
+            body: JSON.stringify({
+              name,
+              location: els.evLocation.value.trim() || null,
+              date: els.evDate.value || null,
+              pool_length_m: Number(els.evPool.value),
+            }),
+          });
+          els.evName.value = "";
+          els.evLocation.value = "";
+          els.evDate.value = "";
+          await refreshEvents();
+          showToast("Evento criado");
+        } catch (error) {
+          showToast(`Erro: ${error.message}`, true);
+        }
       }
 
-      async function createCompetition() {
-        const name = els.name.value.trim();
-        const hours = Number(els.hours.value);
-        if (!name) return showToast("Informe o nome da competição", true);
-        if (!hours || hours <= 0) return showToast("Duração inválida", true);
-        const eventType = els.event.value;
-        const payload = {
-          name,
-          duration_s: Math.round(hours * 3600),
-          meters_lap: Number(els.meters.value),
-          event_type: eventType,
-          distance_m: Number(els.distance.value),
-        };
+      async function updateEvent(fields) {
+        if (!selectedEventId) return;
         try {
-          await api("/api/competition", {
-            method: "POST",
-            body: JSON.stringify(payload),
+          await apiFetch(`/api/events/${selectedEventId}`, {
+            method: "PATCH",
+            body: JSON.stringify(fields),
           });
-          els.name.value = "";
-          showToast("Competição criada");
+          await refreshEvents();
+          showToast("Evento atualizado");
+        } catch (error) {
+          showToast(`Erro: ${error.message}`, true);
+        }
+      }
+
+      async function deleteEvent() {
+        if (!selectedEventId) return;
+        try {
+          await apiFetch(`/api/events/${selectedEventId}`, { method: "DELETE" });
+          selectedEventId = null;
+          await refreshEvents();
+          showToast("Evento excluído");
         } catch (error) {
           showToast(`Erro: ${error.message}`, true);
         }
       }
 
       async function addTeam() {
-        if (!latestState || !latestState.competition) {
-          return showToast("Crie uma competição primeiro", true);
-        }
+        if (!selectedEventId) return showToast("Crie um evento primeiro", true);
         const name = els.teamName.value.trim();
         if (!name) return showToast("Informe o nome da equipe", true);
         try {
-          await api("/api/team", {
+          await apiFetch(`/api/events/${selectedEventId}/teams`, {
             method: "POST",
-            body: JSON.stringify({ competition_id: latestState.competition.id, name }),
+            body: JSON.stringify({ name }),
           });
           els.teamName.value = "";
+          await refreshEvents();
           showToast("Equipe adicionada");
         } catch (error) {
           showToast(`Erro: ${error.message}`, true);
         }
       }
 
-      async function assignLane(laneId, teamId, participantName) {
+      async function removeTeam(teamId) {
         try {
-          await api(`/api/lane/${laneId}/assign`, {
-            method: "POST",
-            body: JSON.stringify({
-              team_id: teamId,
-              participant_name: participantName,
-            }),
-          });
+          await apiFetch(`/api/teams/${teamId}`, { method: "DELETE" });
+          await refreshEvents();
+          showToast("Equipe removida");
         } catch (error) {
           showToast(`Erro: ${error.message}`, true);
         }
       }
 
-      function openResetModal() {
-        els.password.value = "";
-        els.modal.classList.add("open");
-        els.password.focus();
+      async function addHeat() {
+        if (!selectedEventId) return showToast("Crie um evento primeiro", true);
+        const name = els.heatName.value.trim();
+        if (!name) return showToast("Informe o nome da prova", true);
+        const heatType = els.heatType.value;
+        const payload = { name, heat_type: heatType };
+        if (heatType === "bateria") {
+          payload.distance_m = Number(els.heatDistance.value);
+        } else {
+          payload.duration_s = Math.round(Number(els.heatDuration.value) * 3600);
+        }
+        try {
+          await apiFetch(`/api/events/${selectedEventId}/heats`, {
+            method: "POST",
+            body: JSON.stringify(payload),
+          });
+          els.heatName.value = "";
+          await refreshEvents();
+          showToast("Prova criada");
+        } catch (error) {
+          showToast(`Erro: ${error.message}`, true);
+        }
       }
 
+      async function heatAction(heatId, action) {
+        try {
+          await apiFetch(`/api/heats/${heatId}/${action}`, { method: "POST" });
+          await refreshEvents();
+        } catch (error) {
+          showToast(`Erro: ${error.message}`, true);
+        }
+      }
+
+      async function deleteHeat(heatId) {
+        try {
+          await apiFetch(`/api/heats/${heatId}`, { method: "DELETE" });
+          selectedHeatId = null;
+          await refreshEvents();
+          showToast("Prova excluída");
+        } catch (error) {
+          showToast(`Erro: ${error.message}`, true);
+        }
+      }
+
+      async function laneAction(laneId, action) {
+        try {
+          const path =
+            action === "dq"
+              ? `/api/lanes/${laneId}/dq`
+              : `/api/lanes/${laneId}/${action}`;
+          await apiFetch(path, { method: "POST" });
+          await refreshEvents();
+        } catch (error) {
+          showToast(`Erro: ${error.message}`, true);
+        }
+      }
+
+      async function saveLanes() {
+        const heat = selectedHeat();
+        if (!heat) return showToast("Selecione uma prova", true);
+        if (heat.status !== "scheduled" && heat.status !== "ready_check") {
+          return showToast("Prova já iniciada", true);
+        }
+        const existing = new Set(heat.heat_lanes.map((lane) => lane.lane_number));
+        const inputs = els.laneGrid.querySelectorAll("input[data-lane]");
+        const selects = els.laneGrid.querySelectorAll("select[data-lane]");
+        const byNumber = {};
+        inputs.forEach((input) => {
+          const number = Number(input.dataset.lane);
+          byNumber[number] = byNumber[number] || { lane_number: number };
+          byNumber[number].participant_name = input.value.trim() || null;
+        });
+        selects.forEach((select) => {
+          const number = Number(select.dataset.lane);
+          byNumber[number] = byNumber[number] || { lane_number: number };
+          byNumber[number].team_id = select.value || null;
+        });
+        const lanes = Object.values(byNumber).filter(
+          (lane) =>
+            existing.has(lane.lane_number) ||
+            lane.participant_name ||
+            lane.team_id
+        );
+        try {
+          await apiFetch(`/api/heats/${heat.id}/lanes`, {
+            method: "POST",
+            body: JSON.stringify({ lanes }),
+          });
+          await refreshEvents();
+          showToast("Raias salvas");
+        } catch (error) {
+          showToast(`Erro: ${error.message}`, true);
+        }
+      }
+
+      els.eventSelect.addEventListener("change", () => {
+        selectedEventId = els.eventSelect.value;
+        const event = selectedEvent();
+        selectedHeatId = event && event.heats.length ? event.heats[0].id : null;
+        render();
+      });
+      els.heatType.addEventListener("change", () => {
+        const battery = els.heatType.value === "bateria";
+        els.heatDistance.hidden = !battery;
+        els.heatDuration.hidden = battery;
+      });
+      els.createEvent.addEventListener("click", createEvent);
+      els.activateEvent.addEventListener("click", () =>
+        updateEvent({ status: "active" })
+      );
+      els.deleteEvent.addEventListener("click", deleteEvent);
+      els.addTeam.addEventListener("click", addTeam);
+      els.addHeat.addEventListener("click", addHeat);
+      els.saveLanes.addEventListener("click", saveLanes);
+
       const ws = new WSClient(wsUrl(), (message) => {
-        if (message.type === "state") {
-          applyState(message);
-        } else if (message.type === "tick") {
-          timerState = message;
-          renderClock();
+        if (message.type === "heat_state") {
+          applyHeatState(message.payload);
         } else if (message.type === "error") {
           showToast(`Erro: ${message.message}`, true);
         }
@@ -330,30 +528,7 @@
         els.badge.textContent = connected ? "online" : "offline";
       };
 
-      els.event.addEventListener("change", () => {
-        els.distanceField.hidden = els.event.value !== "bateria";
-      });
-
-      els.createComp.addEventListener("click", createCompetition);
-      els.addTeam.addEventListener("click", addTeam);
-      els.start.addEventListener("click", () => {
-        if (!ws.send({ type: "timer_start" })) showToast("Sem conexão", true);
-      });
-      els.pause.addEventListener("click", () => {
-        if (!ws.send({ type: "timer_pause" })) showToast("Sem conexão", true);
-      });
-      els.reset.addEventListener("click", openResetModal);
-      els.resetCancel.addEventListener("click", () => els.modal.classList.remove("open"));
-      els.resetConfirm.addEventListener("click", () => {
-        const password = els.password.value;
-        if (!ws.send({ type: "timer_reset", password })) {
-          showToast("Sem conexão", true);
-          return;
-        }
-        els.modal.classList.remove("open");
-      });
-
-      renderClock();
+      refreshEvents().catch((error) => showToast(error.message, true));
       ws.connect();
     </script>
   </body>

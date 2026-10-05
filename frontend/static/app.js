@@ -109,9 +109,156 @@ function showToast(message, isError = false) {
   showToast._timer = setTimeout(() => toast.classList.remove("show"), 2200);
 }
 
+async function apiFetch(path, options = {}) {
+  const response = await fetch(path, {
+    headers: { "Content-Type": "application/json" },
+    ...options,
+  });
+  if (!response.ok) {
+    let detail = response.statusText;
+    try {
+      const body = await response.json();
+      detail = body.detail || detail;
+    } catch (error) {
+      /* resposta sem JSON */
+    }
+    throw new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
+  }
+  if (response.status === 204) return null;
+  return response.json();
+}
+
+function heatLabel(heat) {
+  if (!heat) return "—";
+  const type = heat.heat_type === "bateria" ? "bateria" : "maratona";
+  return `${heat.name} · ${type}#${heat.order_num}`;
+}
+
+function formatTime(ms) {
+  const value = Math.max(0, Math.floor(ms || 0));
+  const minutes = String(Math.floor(value / 60000)).padStart(2, "0");
+  const seconds = String(Math.floor((value % 60000) / 1000)).padStart(2, "0");
+  const centis = String(Math.floor((value % 1000) / 10)).padStart(2, "0");
+  return `${minutes}:${seconds}.${centis}`;
+}
+
+function formatSpeed(distance_m, race_time_ms) {
+  if (!distance_m || !race_time_ms || race_time_ms <= 0) return "—";
+  return `${(distance_m / (race_time_ms / 1000)).toFixed(2)} m/s`;
+}
+
+function formatDuration(seconds) {
+  const total = Math.max(0, Math.floor(seconds || 0));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  return `${hours}h${String(minutes).padStart(2, "0")}min`;
+}
+
+async function api(method, path, body) {
+  const options = {
+    method,
+    headers: { "Content-Type": "application/json" },
+  };
+  if (body !== undefined && body !== null) {
+    options.body = JSON.stringify(body);
+  }
+  const response = await fetch(path, options);
+  if (!response.ok) {
+    let detail = response.statusText;
+    try {
+      const payload = await response.json();
+      detail = payload.detail || detail;
+    } catch (error) {
+      /* resposta sem JSON */
+    }
+    const error = new Error(
+      typeof detail === "string" ? detail : JSON.stringify(detail)
+    );
+    error.status = response.status;
+    throw error;
+  }
+  if (response.status === 204) return null;
+  return response.json();
+}
+
+function showFeedback(element, state, message) {
+  if (!element) return;
+  if (state === "loading") {
+    if (!element.dataset.label) element.dataset.label = element.textContent;
+    element.classList.remove("success", "error");
+    element.classList.add("loading");
+    element.disabled = true;
+    element.textContent = message || "Salvando...";
+    return;
+  }
+  element.classList.remove("loading");
+  element.disabled = false;
+  const label = element.dataset.label;
+  if (state === "success") {
+    element.classList.add("success");
+    element.textContent = message || "✓ Salvo";
+    setTimeout(() => {
+      element.classList.remove("success");
+      if (label) element.textContent = label;
+    }, 1500);
+  } else if (state === "error") {
+    element.classList.add("error");
+    element.textContent = message || "Erro";
+    setTimeout(() => {
+      element.classList.remove("error");
+      if (label) element.textContent = label;
+    }, 2500);
+  }
+}
+
+function escapeHtml(value) {
+  return String(value == null ? "" : value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+const STATUS_LABELS = {
+  draft: "Rascunho",
+  active: "Em andamento",
+  finished: "Encerrado",
+  scheduled: "Agendada",
+  ready_check: "Chamada",
+  assigned: "Aguardando",
+  ready: "Pronta",
+  dq: "DQ",
+};
+
+function statusLabel(status) {
+  return STATUS_LABELS[status] || status || "—";
+}
+
+function heatTypeLabel(heat) {
+  if (!heat) return "—";
+  if (heat.heat_type === "bateria") return `Bateria · ${heat.distance_m}m`;
+  return `Maratona · ${formatDuration(heat.duration_s || 0)}`;
+}
+
+function pluralize(count, singular, plural) {
+  return `${count} ${count === 1 ? singular : plural || singular + "s"}`;
+}
+
 window.WSClient = WSClient;
 window.formatClock = formatClock;
 window.formatRaceTime = formatRaceTime;
 window.formatTenths = formatTenths;
+window.formatTime = formatTime;
+window.formatSpeed = formatSpeed;
+window.formatDuration = formatDuration;
 window.wsUrl = wsUrl;
 window.showToast = showToast;
+window.apiFetch = apiFetch;
+window.api = api;
+window.showFeedback = showFeedback;
+window.escapeHtml = escapeHtml;
+window.statusLabel = statusLabel;
+window.heatTypeLabel = heatTypeLabel;
+window.heatLabel = heatLabel;
+window.pluralize = pluralize;

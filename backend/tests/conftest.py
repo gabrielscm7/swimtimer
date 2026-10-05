@@ -1,6 +1,19 @@
+import atexit
 import os
+import tempfile
 
-os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
+_db_fd, _DB_PATH = tempfile.mkstemp(suffix=".db", prefix="swimtimer_test_")
+os.close(_db_fd)
+os.environ.setdefault("DATABASE_URL", f"sqlite+aiosqlite:///{_DB_PATH}")
+
+
+@atexit.register
+def _cleanup_test_db() -> None:
+    try:
+        os.remove(_DB_PATH)
+    except OSError:
+        pass
+
 
 import pytest
 import pytest_asyncio
@@ -15,7 +28,6 @@ from sqlalchemy.pool import StaticPool
 
 import app.main as main_module
 from app.database import Base, get_db
-from app.main import app
 
 
 @pytest_asyncio.fixture
@@ -39,42 +51,114 @@ async def client():
             yield session
 
     original_factory = main_module.AsyncSessionLocal
-    app.dependency_overrides[get_db] = override_get_db
+    main_module.app.dependency_overrides[get_db] = override_get_db
     main_module.AsyncSessionLocal = session_factory
     try:
-        transport = ASGITransport(app=app)
+        transport = ASGITransport(app=main_module.app)
         async with AsyncClient(transport=transport, base_url="http://test") as ac:
             yield ac
     finally:
-        await main_module.timer.reset()
-        app.dependency_overrides.clear()
+        main_module.app.dependency_overrides.clear()
         main_module.AsyncSessionLocal = original_factory
         await engine.dispose()
 
 
 @pytest.fixture
 def ws_client():
-    with TestClient(app) as test_client:
+    with TestClient(main_module.app) as test_client:
         yield test_client
 
 
-async def create_competition_with_lanes(
+async def create_event(
     client: AsyncClient,
-    name: str = "Prova Teste",
-    duration_s: int = 10800,
-    meters_lap: int = 25,
-) -> tuple[dict, list[dict]]:
+    name: str = "Evento Teste",
+    pool_length_m: int = 25,
+) -> dict:
     response = await client.post(
-        "/api/competition",
-        json={
-            "name": name,
-            "duration_s": duration_s,
-            "meters_lap": meters_lap,
-        },
+        "/api/events",
+        json={"name": name, "pool_length_m": pool_length_m},
     )
     assert response.status_code == 201, response.text
-    competition = response.json()
-    state = await client.get("/api/competition/current")
-    assert state.status_code == 200
-    lanes = state.json()["lanes"]
-    return competition, lanes
+    return response.json()
+
+
+async def create_team(
+    client: AsyncClient,
+    event_id: str,
+    name: str = "Equipe A",
+) -> dict:
+    response = await client.post(
+        f"/api/events/{event_id}/teams",
+        json={"name": name},
+    )
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
+async def create_heat(
+    client: AsyncClient,
+    event_id: str,
+    *,
+    name: str = "Prova Teste",
+    heat_type: str = "bateria",
+    distance_m: int | None = 25,
+    duration_s: int | None = None,
+    order_num: int | None = None,
+) -> dict:
+    body: dict = {"name": name, "heat_type": heat_type}
+    if distance_m is not None:
+        body["distance_m"] = distance_m
+    if duration_s is not None:
+        body["duration_s"] = duration_s
+    if order_num is not None:
+        body["order_num"] = order_num
+    response = await client.post(f"/api/events/{event_id}/heats", json=body)
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
+async def configure_lanes(
+    client: AsyncClient,
+    heat_id: str,
+    participants: list[tuple[int, str]],
+) -> dict:
+    lanes = [
+        {"lane_number": number, "participant_name": name}
+        for number, name in participants
+    ]
+    response = await client.post(
+        f"/api/heats/{heat_id}/lanes", json={"lanes": lanes}
+    )
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+async def ready_all(client: AsyncClient, heat: dict) -> dict:
+    for lane in heat["heat_lanes"]:
+        response = await client.post(f"/api/lanes/{lane['id']}/ready")
+        assert response.status_code == 200, response.text
+    return heat
+
+
+async def setup_bateria(
+    client: AsyncClient,
+    participants: list[tuple[int, str]],
+    distance_m: int = 25,
+) -> tuple[dict, dict]:
+    event = await create_event(client, pool_length_m=25)
+    team = await create_team(client, event["id"], "Equipe Azul")
+    heat = await create_heat(
+        client,
+        event["id"],
+        heat_type="bateria",
+        distance_m=distance_m,
+    )
+    heat = await configure_lanes(client, heat["id"], participants)
+    for lane in heat["heat_lanes"]:
+        response = await client.patch(
+            f"/api/lanes/{lane['id']}", json={"team_id": team["id"]}
+        )
+        assert response.status_code == 200, response.text
+    response = await client.post(f"/api/heats/{heat['id']}/open-ready-check")
+    assert response.status_code == 200, response.text
+    return event, response.json()

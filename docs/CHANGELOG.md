@@ -4,6 +4,26 @@ Formato: [Semantic Versioning](https://semver.org/lang/pt-BR/)
 
 ---
 
+## [Unreleased] — v2.0.0
+
+### Changed
+- Refatoração arquitetural: `Competition`/`Lane` substituídos por `Event` (contêiner) + `Heat` (prova) + `HeatLane` (raia)
+- Migração Alembic aplicada automaticamente no start, migrando dados de `competition`/`lane` sem perda
+- API REST reorganizada em Eventos, Equipes, Provas e Raias
+- WebSocket com mensagens escopadas: `heat_state` (scope `heat`), `ready_update` (scope `heat`) e `server_status` (scope `home`)
+- Cronômetro calculado no cliente a partir de `started_at`; removido o timer global do servidor
+
+### Added
+- `GET /api/status` com uptime, clientes conectados e provas ativas
+- Fluxo de prontidão (`open-ready-check` + `ready` por raia) antes de iniciar uma prova
+- DQ por raia contabilizado para encerrar a prova
+
+### Removed
+- Endpoints `/api/competition/*`, `/api/team` e `/api/lane/*/assign`
+- `app/timer.py` e as migrações SQL manuais (`migrations/001_add_bateria.sql`)
+
+---
+
 ## [Unreleased] — v1.0.0
 
 ### Added

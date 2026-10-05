@@ -3,6 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#0f1117" />
     <title>SwimTimer</title>
     <link rel="stylesheet" href="/static/style.css" />
   </head>
@@ -10,47 +11,48 @@
     <main class="app">
       <div class="topbar">
         <div class="brand">Swim<span>Timer</span></div>
-        <span class="badge" id="conn-badge">conectando...</span>
+        <span class="badge offline" id="conn-badge">offline</span>
       </div>
 
-      <div class="panel center">
-        <h2>Maratona Aquática</h2>
-        <p class="muted">Escolha o perfil de acesso</p>
-      </div>
+      <div class="home-grid">
+        <section>
+          <div class="panel">
+            <h2>Servidor</h2>
+            <div class="status-row">
+              <span class="dot offline" id="server-dot"></span>
+              <strong id="server-state">conectando...</strong>
+            </div>
+            <div class="stat-note" id="server-uptime">—</div>
+            <div class="stat-note">SwimTimer v1.0</div>
+          </div>
 
-      <div class="entry-grid">
-        <a class="entry-card" href="fiscal.html">
-          <span class="icon">📱</span>
-          Fiscal
-          <small>Registrar chegadas</small>
-        </a>
-        <a class="entry-card" href="dashboard.html">
-          <span class="icon">📺</span>
-          Dashboard
-          <small>Ranking no telão</small>
-        </a>
-        <a class="entry-card" href="admin.html">
-          <span class="icon">⚙️</span>
-          Admin
-          <small>Configurar e controlar</small>
-        </a>
+          <div class="panel">
+            <h2>Terminais conectados</h2>
+            <div class="stat-value" id="terminal-count">—</div>
+            <div class="stat-note" id="terminal-note">aguardando conexão</div>
+          </div>
+
+          <div class="panel">
+            <h2>Em andamento</h2>
+            <div id="running-list">
+              <p class="muted">Nenhuma bateria em andamento</p>
+            </div>
+          </div>
+        </section>
+
+        <section>
+          <div class="section-head">
+            <h2>Eventos</h2>
+            <button class="primary" id="btn-new-event">+ Novo Evento</button>
+          </div>
+          <div id="event-list">
+            <p class="muted">Carregando eventos...</p>
+          </div>
+        </section>
       </div>
     </main>
 
     <script src="/static/app.js"></script>
-    <script>
-      const badge = document.getElementById("conn-badge");
-      const ws = new WSClient(wsUrl(), (message) => {
-        if (message.type === "state" && message.competition) {
-          badge.textContent = message.competition.name;
-        }
-      });
-      ws.onStatusChange = (connected) => {
-        badge.classList.toggle("online", connected);
-        badge.classList.toggle("offline", !connected);
-        badge.textContent = connected ? "online" : "offline";
-      };
-      ws.connect();
-    </script>
+    <script src="/static/home.js"></script>
   </body>
 </html>

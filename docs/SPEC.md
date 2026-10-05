@@ -57,93 +57,133 @@
 ### 3.1 Diagrama
 
 ```
-Competition
-  id, name, status, duration_seconds, meters_per_lap
-  created_at, started_at, finished_at
+Event
+  id, name, location, date, pool_length_m (25|50)
+  status (draft|active|finished), created_at
 
 Team
-  id, competition_id, name
+  id, event_id, name
 
-Lane
-  id, competition_id, number (1–8), team_id
-  laps (int), status (waiting|active|finished)
+Heat
+  id, event_id, name, order_num, heat_type (maratona|bateria)
+  distance_m (bateria), duration_s (maratona)
+  status (scheduled|ready_check|active|finished)
+  started_at, finished_at
+
+HeatLane
+  id, heat_id, lane_number (1–8), participant_name, team_id
+  status (assigned|ready|active|finished|dq)
+  finish_at, race_time_ms
 
 LapEvent
-  id, lane_id, lap_number, recorded_at (servidor)
-  is_undo (bool)
+  id, lane_id, lap_number, recorded_at (servidor), is_undo
 ```
+
+> Um `Event` é o contêiner (várias `Heat`). Cada `Heat` é uma prova
+> individual (bateria cronometrada ou maratona) com até 8 `HeatLane`.
 
 ### 3.2 Tabelas SQL
 
 ```sql
-CREATE TABLE competition (
-    id          TEXT PRIMARY KEY,  -- UUID
-    name        TEXT NOT NULL,
-    status      TEXT DEFAULT 'draft',  -- draft|active|finished
-    duration_s  INTEGER NOT NULL,  -- duração em segundos (ex: 10800 = 3h)
-    meters_lap  INTEGER NOT NULL,  -- metros por comprimento (25 ou 50)
-    started_at  REAL,              -- unix timestamp
-    finished_at REAL,
-    created_at  REAL NOT NULL
+CREATE TABLE event (
+    id             TEXT PRIMARY KEY,  -- UUID
+    name           TEXT NOT NULL,
+    location       TEXT,
+    date           TEXT,              -- ISO date string
+    pool_length_m  INTEGER NOT NULL,  -- 25 ou 50
+    status         TEXT DEFAULT 'draft',  -- draft|active|finished
+    created_at     REAL NOT NULL
 );
 
 CREATE TABLE team (
-    id              TEXT PRIMARY KEY,
-    competition_id  TEXT NOT NULL REFERENCES competition(id),
-    name            TEXT NOT NULL
+    id        TEXT PRIMARY KEY,
+    event_id  TEXT NOT NULL REFERENCES event(id),
+    name      TEXT NOT NULL
 );
 
-CREATE TABLE lane (
-    id              TEXT PRIMARY KEY,
-    competition_id  TEXT NOT NULL REFERENCES competition(id),
-    number          INTEGER NOT NULL,  -- 1 a 8
-    team_id         TEXT REFERENCES team(id),
-    laps            INTEGER DEFAULT 0,
-    status          TEXT DEFAULT 'waiting'
+CREATE TABLE heat (
+    id           TEXT PRIMARY KEY,
+    event_id     TEXT NOT NULL REFERENCES event(id),
+    name         TEXT NOT NULL,
+    order_num    INTEGER NOT NULL,
+    heat_type    TEXT NOT NULL,      -- maratona|bateria
+    distance_m   INTEGER,            -- bateria
+    duration_s   INTEGER,            -- maratona
+    status       TEXT DEFAULT 'scheduled',
+    started_at   REAL,
+    finished_at  REAL
+);
+
+CREATE TABLE heat_lane (
+    id               TEXT PRIMARY KEY,
+    heat_id          TEXT NOT NULL REFERENCES heat(id),
+    lane_number      INTEGER NOT NULL,  -- 1 a 8
+    participant_name TEXT,
+    team_id          TEXT REFERENCES team(id),
+    status           TEXT DEFAULT 'assigned',
+    finish_at        REAL,
+    race_time_ms     INTEGER,
+    UNIQUE (heat_id, lane_number)
 );
 
 CREATE TABLE lap_event (
     id          TEXT PRIMARY KEY,
-    lane_id     TEXT NOT NULL REFERENCES lane(id),
+    lane_id     TEXT NOT NULL REFERENCES heat_lane(id),
     lap_number  INTEGER NOT NULL,
     recorded_at REAL NOT NULL,  -- unix timestamp do SERVIDOR
     is_undo     BOOLEAN DEFAULT FALSE
 );
 
-CREATE INDEX idx_lap_event_lane ON lap_event(lane_id);
-CREATE INDEX idx_lap_event_recorded ON lap_event(recorded_at);
+CREATE INDEX ix_heat_event_order ON heat(event_id, order_num);
+CREATE INDEX ix_lap_event_lane_recorded ON lap_event(lane_id, recorded_at);
 ```
 
 ---
 
 ## 4. API REST
 
-### Competição
+### Eventos
 ```
-GET    /api/competition/current     → estado atual completo
-POST   /api/competition             → criar nova competição
-PATCH  /api/competition/{id}        → atualizar (nome, duração, etc)
-POST   /api/competition/{id}/start  → disparar cronômetro (operador)
-POST   /api/competition/{id}/reset  → zerar (senha obrigatória)
-```
-
-### Equipes e Raias
-```
-POST   /api/team                    → cadastrar equipe
-GET    /api/team?competition={id}   → listar equipes
-POST   /api/lane/{id}/assign        → atribuir equipe a raia
+GET    /api/events                    → lista todos (com heats)
+POST   /api/events                    → criar evento
+GET    /api/events/{event_id}         → detalhe + heats + teams
+PATCH  /api/events/{event_id}         → atualizar
+DELETE /api/events/{event_id}         → deletar (só se draft)
 ```
 
-### Lançamentos
+### Equipes
 ```
-POST   /api/lane/{id}/lap           → registrar chegada/virada (fiscal)
-DELETE /api/lane/{id}/lap/last      → desfazer último (fiscal, < 30s)
+POST   /api/events/{event_id}/teams   → criar equipe
+GET    /api/events/{event_id}/teams   → listar
+DELETE /api/teams/{team_id}           → deletar
+```
+
+### Provas (heats)
+```
+POST   /api/events/{event_id}/heats            → criar prova
+GET    /api/events/{event_id}/heats            → listar em ordem
+PATCH  /api/heats/{heat_id}                    → atualizar
+DELETE /api/heats/{heat_id}                    → deletar (só se scheduled)
+POST   /api/heats/{heat_id}/open-ready-check   → status → ready_check
+POST   /api/heats/{heat_id}/start              → status → active (exige todas prontas)
+POST   /api/heats/{heat_id}/abort              → volta para scheduled
+```
+
+### Raias
+```
+POST   /api/heats/{heat_id}/lanes     → configurar raias (batch)
+PATCH  /api/lanes/{lane_id}           → editar participante/equipe
+POST   /api/lanes/{lane_id}/ready     → fiscal confirma pronto
+POST   /api/lanes/{lane_id}/finish    → registrar chegada (bateria)
+POST   /api/lanes/{lane_id}/lap       → registrar volta (maratona)
+POST   /api/lanes/{lane_id}/dq        → desclassificar
+DELETE /api/lanes/{lane_id}/lap/last  → desfazer última volta (maratona, < 30s)
 ```
 
 ### Admin
 ```
-GET    /api/export/csv              → exportar resultados
-GET    /api/health                  → healthcheck
+GET    /api/status                    → {uptime, connected_clients, active_heats}
+GET    /api/health                    → healthcheck
 ```
 
 ---
@@ -155,65 +195,48 @@ GET    /api/health                  → healthcheck
 ws://10.42.0.1:8080/ws
 ```
 
-Conexão única para todos os clientes. O servidor faz broadcast para todos quando qualquer estado muda.
+Conexão única para todos os clientes. O servidor faz broadcast global. Toda
+mensagem carrega um campo `scope` para o cliente filtrar. As ações de escrita
+são feitas via REST; o WebSocket é usado somente para receber atualizações.
 
 ### Mensagens Servidor → Cliente
 
 ```jsonc
-// Estado completo (enviado na conexão e após qualquer mudança)
+// Status do servidor (conexão e mudanças de contagem)
 {
-  "type": "state",
-  "competition": {
-    "id": "uuid",
-    "name": "Festival Infantil SESI",
-    "status": "active",
-    "started_at": 1727700000.0,
-    "duration_s": 10800
-  },
-  "lanes": [
-    {
-      "id": "uuid",
-      "number": 1,
-      "team": "Equipe Azul",
-      "laps": 12,
-      "meters": 600,
-      "status": "active",
-      "last_lap_at": 1727700123.4
-    }
-  ]
+  "type": "server_status",
+  "scope": "home",
+  "payload": { "connected": 4, "active_heats": 1 }
 }
 
-// Confirmação de lap (enviado após registro)
+// Estado completo de uma prova (após qualquer mudança)
 {
-  "type": "lap",
-  "lane_id": "uuid",
-  "lane_number": 3,
-  "team": "Equipe Vermelha",
-  "laps": 7,
-  "meters": 350
+  "type": "heat_state",
+  "scope": "heat",
+  "heat_id": "uuid",
+  "payload": { "id": "uuid", "name": "Bateria 1", "status": "active",
+               "heat_lanes": [ /* ... */ ] }
 }
 
-// Timer (enviado a cada segundo quando ativo)
+// Situação de prontidão das raias
 {
-  "type": "tick",
-  "elapsed_s": 1842,
-  "remaining_s": 8958
+  "type": "ready_update",
+  "scope": "heat",
+  "heat_id": "uuid",
+  "payload": {
+    "lanes_ready": [1, 3, 4],
+    "lanes_pending": [2, 5],
+    "all_ready": false
+  }
 }
 ```
+
+Ao conectar, o servidor envia `server_status` e, em seguida, um `heat_state`
+para cada prova em `ready_check` ou `active`.
 
 ### Mensagens Cliente → Servidor
-```jsonc
-// Registrar virada/chegada
-{ "type": "lap", "lane_id": "uuid" }
-
-// Desfazer último
-{ "type": "undo", "lane_id": "uuid" }
-
-// Controle de timer (operador)
-{ "type": "timer_start" }
-{ "type": "timer_pause" }
-{ "type": "timer_reset", "password": "xxxx" }
-```
+Nenhuma. Registro de voltas/chegadas, prontidão e controle da prova são feitos
+pelos endpoints REST (`/api/lanes/...`, `/api/heats/...`).
 
 ---
 
@@ -224,12 +247,15 @@ swimtimer/
 ├── backend/
 │   ├── app/
 │   │   ├── main.py           ← FastAPI app + rotas + WS
-│   │   ├── database.py       ← SQLAlchemy + SQLite
-│   │   ├── models.py         ← ORM models
+│   │   ├── database.py       ← SQLAlchemy + SQLite + start das migrations
+│   │   ├── models.py         ← ORM models (Event, Team, Heat, HeatLane, LapEvent)
 │   │   ├── schemas.py        ← Pydantic schemas
 │   │   ├── ws_manager.py     ← WebSocket connection manager
-│   │   ├── timer.py          ← Lógica do cronômetro (asyncio)
-│   │   └── config.py         ← Settings (senha, porta, etc)
+│   │   └── config.py         ← Settings (porta, banco, etc)
+│   ├── migrations/           ← ambiente Alembic + versões
+│   │   ├── env.py
+│   │   └── versions/
+│   ├── alembic.ini
 │   ├── tests/
 │   │   ├── test_api.py
 │   │   └── test_ws.py

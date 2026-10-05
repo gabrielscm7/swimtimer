@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#0f1117" />
+    <title>SwimTimer — Público</title>
+    <link rel="stylesheet" href="/static/style.css" />
+    <style>
+      html,
+      body {
+        height: 100%;
+      }
+      body {
+        overflow: hidden;
+        cursor: default;
+      }
+      #pub-stage {
+        height: 100vh;
+        width: 100vw;
+        padding: clamp(16px, 2.5vw, 44px);
+        display: flex;
+        flex-direction: column;
+        transition: opacity 400ms ease;
+        opacity: 1;
+        overflow: hidden;
+      }
+      #pub-stage.pub-select {
+        overflow: auto;
+      }
+      .pub-center {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        text-align: center;
+      }
+      .pub-label {
+        text-transform: uppercase;
+        letter-spacing: 3px;
+        color: var(--muted);
+        font-size: clamp(14px, 1.4vw, 22px);
+        margin-bottom: 10px;
+      }
+      .pub-event-title {
+        font-size: clamp(40px, 6vw, 96px);
+        font-weight: 800;
+        margin: 0 0 10px;
+        color: var(--text);
+      }
+      .pub-subtitle {
+        color: var(--muted);
+        font-size: clamp(18px, 2vw, 32px);
+        margin-bottom: 34px;
+      }
+      .pub-upcoming {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        padding: clamp(18px, 2vw, 32px) clamp(24px, 3vw, 56px);
+        min-width: min(720px, 80vw);
+      }
+      .pub-up-item {
+        display: flex;
+        align-items: baseline;
+        gap: 16px;
+        padding: 10px 0;
+        font-size: clamp(20px, 2.2vw, 34px);
+        border-bottom: 1px solid var(--border);
+        text-align: left;
+      }
+      .pub-up-item:last-child {
+        border-bottom: none;
+      }
+      .pub-up-num {
+        color: var(--cyan);
+        font-weight: 800;
+        min-width: 1.6em;
+      }
+      .pub-waiting {
+        margin-top: 34px;
+        color: var(--muted);
+        font-size: clamp(18px, 1.8vw, 28px);
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+      .pub-waiting .dot {
+        animation: pub-dot 1.4s ease-in-out infinite;
+      }
+      @keyframes pub-dot {
+        0%,
+        100% {
+          opacity: 1;
+        }
+        50% {
+          opacity: 0.3;
+        }
+      }
+      .pub-top-event {
+        color: var(--muted);
+        font-size: clamp(16px, 1.6vw, 26px);
+        margin-bottom: 6px;
+      }
+      .pub-heat-name {
+        font-size: clamp(28px, 3.5vw, 52px);
+        font-weight: 800;
+        color: var(--text);
+        line-height: 1.1;
+      }
+      .pub-heat-type {
+        color: var(--cyan);
+        font-size: clamp(18px, 2vw, 30px);
+        margin-top: 8px;
+      }
+      .pub-lane-grid {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: center;
+        gap: clamp(12px, 1.4vw, 24px);
+        margin-top: 34px;
+      }
+      .pub-lane-card {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        padding: clamp(14px, 1.4vw, 26px) clamp(18px, 1.8vw, 34px);
+        min-width: clamp(140px, 12vw, 220px);
+      }
+      .pub-lane-num {
+        color: var(--cyan);
+        font-weight: 800;
+        font-size: clamp(16px, 1.5vw, 24px);
+        letter-spacing: 1px;
+      }
+      .pub-lane-name {
+        font-size: clamp(22px, 2.4vw, 40px);
+        font-weight: 700;
+        margin-top: 6px;
+      }
+      .pub-lane-team {
+        color: var(--muted);
+        font-size: clamp(16px, 1.6vw, 26px);
+        margin-top: 2px;
+      }
+      .pub-footer {
+        text-align: center;
+        color: var(--muted);
+        font-size: clamp(18px, 1.8vw, 30px);
+        padding: 18px 0;
+      }
+      .pub-racing-top {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 24px;
+        padding-bottom: clamp(10px, 1vw, 20px);
+        border-bottom: 2px solid var(--border);
+        margin-bottom: clamp(10px, 1vw, 20px);
+      }
+      .pub-racing-meta .pub-heat-name {
+        font-size: clamp(24px, 2.8vw, 40px);
+      }
+      .pub-racing-clock {
+        text-align: right;
+        flex: none;
+      }
+      .pub-clock {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-variant-numeric: tabular-nums;
+        font-size: clamp(40px, 5vw, 72px);
+        font-weight: 700;
+        color: var(--cyan);
+        line-height: 1;
+      }
+      .pub-racing-body {
+        flex: 1;
+        overflow: auto;
+      }
+      .pub-table {
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+      }
+      .pub-thead,
+      .pub-trow {
+        display: grid;
+        gap: clamp(10px, 1.2vw, 24px);
+        align-items: center;
+        padding: clamp(8px, 0.9vw, 18px) clamp(10px, 1vw, 20px);
+      }
+      .pub-thead {
+        color: var(--muted);
+        text-transform: uppercase;
+        letter-spacing: 2px;
+        font-size: clamp(12px, 1vw, 18px);
+        border-bottom: 2px solid var(--border);
+      }
+      .pub-trow {
+        border-bottom: 1px solid var(--border);
+      }
+      .pub-battery .pub-thead,
+      .pub-battery .pub-trow {
+        grid-template-columns: clamp(50px, 5vw, 70px) 1fr 1fr clamp(150px, 14vw, 220px) clamp(90px, 8vw, 140px);
+      }
+      .pub-marathon .pub-thead,
+      .pub-marathon .pub-trow {
+        grid-template-columns: clamp(50px, 5vw, 70px) 1fr clamp(80px, 7vw, 120px) clamp(90px, 8vw, 140px) clamp(90px, 8vw, 140px);
+      }
+      .pub-pos {
+        font-size: clamp(24px, 3vw, 44px);
+        font-weight: 800;
+        color: var(--muted);
+        text-align: center;
+      }
+      .pub-pos.gold {
+        color: #facc15;
+      }
+      .pub-pos.silver {
+        color: #cbd5e1;
+      }
+      .pub-pos.bronze {
+        color: #d97706;
+      }
+      .pub-name {
+        font-size: clamp(20px, 2.5vw, 36px);
+        font-weight: 700;
+      }
+      .pub-team {
+        font-size: clamp(16px, 2vw, 28px);
+        color: var(--muted);
+      }
+      .pub-time {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-variant-numeric: tabular-nums;
+        font-size: clamp(24px, 3vw, 44px);
+        font-weight: 700;
+        color: var(--text);
+        text-align: right;
+      }
+      .pub-speed {
+        font-size: clamp(16px, 2vw, 28px);
+        color: var(--muted);
+        text-align: right;
+      }
+      .pub-trow.finished {
+        background: rgba(0, 212, 255, 0.06);
+      }
+      .pub-trow.running {
+        animation: pub-row-pulse 2s ease-in-out infinite;
+      }
+      @keyframes pub-row-pulse {
+        0%,
+        100% {
+          background: transparent;
+        }
+        50% {
+          background: rgba(255, 255, 255, 0.03);
+        }
+      }
+      .pub-trow.dq {
+        opacity: 0.5;
+      }
+      .pub-dq-badge {
+        display: inline-block;
+        background: var(--red);
+        color: #fff;
+        font-size: clamp(14px, 1.4vw, 22px);
+        font-weight: 800;
+        padding: 2px 12px;
+        border-radius: 999px;
+      }
+      .pub-podium {
+        display: flex;
+        align-items: flex-end;
+        justify-content: center;
+        gap: clamp(14px, 2vw, 40px);
+        margin: clamp(16px, 2vw, 40px) 0;
+      }
+      .pub-podium-card {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        padding: clamp(14px, 1.6vw, 30px) clamp(16px, 1.8vw, 36px);
+        text-align: center;
+        min-width: clamp(130px, 13vw, 240px);
+      }
+      .pub-podium-card.place-1 {
+        border-color: #facc15;
+        transform: scale(1.08);
+      }
+      .pub-podium-card.place-2 {
+        border-color: #cbd5e1;
+      }
+      .pub-podium-card.place-3 {
+        border-color: #d97706;
+      }
+      .pub-podium-medal {
+        font-size: clamp(28px, 3vw, 48px);
+      }
+      .pub-podium-name {
+        font-size: clamp(20px, 2.4vw, 38px);
+        font-weight: 800;
+        margin-top: 6px;
+      }
+      .pub-podium-team {
+        color: var(--muted);
+        font-size: clamp(16px, 1.6vw, 26px);
+      }
+      .pub-podium-result {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        color: var(--cyan);
+        font-size: clamp(24px, 2.6vw, 42px);
+        font-weight: 700;
+        margin-top: 8px;
+      }
+      .pub-result-table {
+        overflow: auto;
+      }
+      .pub-interval {
+        flex: 1;
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: clamp(18px, 2vw, 48px);
+        align-items: center;
+      }
+      .pub-interval-col {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        padding: clamp(20px, 2.2vw, 44px);
+        height: 80%;
+        overflow: auto;
+      }
+      .pub-end-group {
+        margin-bottom: 22px;
+      }
+      .pub-selection {
+        max-width: 720px;
+        margin: 0 auto;
+        width: 100%;
+      }
+      .pub-select-card {
+        display: block;
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        padding: clamp(18px, 2vw, 28px);
+        margin-bottom: 14px;
+        color: var(--text);
+        font-size: clamp(20px, 2.2vw, 32px);
+        font-weight: 700;
+        text-align: left;
+      }
+      .pub-select-card small {
+        display: block;
+        color: var(--muted);
+        font-size: clamp(14px, 1.4vw, 20px);
+        font-weight: 400;
+        margin-top: 6px;
+      }
+      .pub-select-card:hover {
+        border-color: var(--cyan);
+      }
+      .pub-overlay {
+        position: fixed;
+        right: 18px;
+        bottom: 18px;
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        z-index: 50;
+      }
+      .pub-fs {
+        background: rgba(26, 29, 39, 0.75);
+        border: 1px solid var(--border);
+        color: var(--muted);
+        border-radius: 10px;
+        padding: 10px 14px;
+        font-size: 20px;
+        line-height: 1;
+        min-height: 0;
+      }
+      .pub-overlay .dot {
+        width: 12px;
+        height: 12px;
+      }
+      @media (max-width: 900px) {
+        .pub-interval {
+          grid-template-columns: 1fr;
+        }
+        .pub-battery .pub-thead,
+        .pub-battery .pub-trow {
+          grid-template-columns: 44px 1fr 1fr 120px 80px;
+        }
+        .pub-marathon .pub-thead,
+        .pub-marathon .pub-trow {
+          grid-template-columns: 44px 1fr 70px 80px 90px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main id="pub-stage"></main>
+    <div class="pub-overlay" id="pub-overlay" hidden>
+      <span class="dot offline" id="pub-dot"></span>
+      <button class="pub-fs" id="pub-fullscreen" title="Tela cheia">⛶</button>
+    </div>
+
+    <script src="/static/app.js"></script>
+    <script src="/static/publico.js"></script>
+  </body>
+</html>
