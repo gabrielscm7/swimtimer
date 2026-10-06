@@ -38,10 +38,19 @@ else
 fi
 
 # ─── ETAPA 3: Subir o servidor ────────────────────────────────────
-echo "🚀 Subindo containers (docker compose up --build -d)..."
-if ! docker compose up --build -d; then
-  echo "❌ Falha ao subir os containers."
-  exit 1
+# Verifica se a imagem já existe em cache local
+IMAGE_NAME=$(docker compose config --images 2>/dev/null | head -1)
+IMAGE_EXISTS=$(docker images -q "$IMAGE_NAME" 2>/dev/null)
+
+if [ -n "$IMAGE_EXISTS" ]; then
+  echo "✅ Imagem local encontrada — iniciando sem download..."
+  docker compose up -d || { echo "❌ Falha ao subir containers."; exit 1; }
+else
+  echo "📦 Imagem não encontrada — construindo (requer internet)..."
+  echo "   Isso acontece apenas na primeira execução."
+  docker compose up --build -d || { echo "❌ Falha ao subir containers."; exit 1; }
+  echo "✅ Imagem construída e salva em cache local."
+  echo "   Próximas execuções não precisarão de internet."
 fi
 
 # ─── ETAPA 4: Health check em loop ────────────────────────────────
