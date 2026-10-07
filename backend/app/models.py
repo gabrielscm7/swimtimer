@@ -1,6 +1,14 @@
 import uuid
 
-from sqlalchemy import Boolean, Float, ForeignKey, Index, Integer, String
+from sqlalchemy import (
+    Boolean,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .database import Base
@@ -122,4 +130,5 @@ class LapEvent(Base):
 
     __table_args__ = (
         Index("ix_lap_event_lane_recorded", "lane_id", "recorded_at"),
+        UniqueConstraint("lane_id", "lap_number", name="uq_lap_event_lane_number"),
     )

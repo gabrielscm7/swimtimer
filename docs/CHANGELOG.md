@@ -4,6 +4,29 @@ Formato: [Semantic Versioning](https://semver.org/lang/pt-BR/)
 
 ---
 
+## [Unreleased] — v2.0.1
+
+### Fixed
+- Concorrência de raias: `finish` duplo agora retorna 409 (lock por prova); `lap_number` único por raia (constraint `uq_lap_event_lane_number` + migração `0002` que renumera dados legados)
+- `order_num` de provas não colide mais em criação simultânea
+- Batch de raias com `lane_number` repetido retorna 400 em vez de 500
+- `PATCH /api/lanes/{id}` com corpo vazio não derruba mais o estado `ready`
+- WebSocket não derruba mais a conexão em erro interno (responde `erro_interno`)
+- `.env` ausente: `start.sh` cria a partir de `.env.example` via `scripts/ensure_env.sh` e não aborta mais em silêncio
+- `start.sh` reconstrói a imagem quando o código-fonte muda (hash em `.build_hash`), evitando rodar imagem velha
+- Backup do SQLite usa `sqlite3 .backup` (snapshot consistente) com fallback para `cp`
+- Fiscal: erros definitivos (4xx) são descartados da fila offline; fallback REST atualiza o estado local
+- Reconexão do WebSocket não empilha mais sockets/timers
+- XSS: escape de `heat.name`/`participant_name`/`team`/`date` em admin, dashboard e gestão
+
+### Changed
+- SQLite com `journal_mode=WAL`, `busy_timeout=5000` e `foreign_keys=ON`
+- `docker-compose.yml` sem `version` obsoleto e com `env_file` opcional
+- Scripts `stop.sh`/`setup-permissions.sh` com `set -euo pipefail` e `cd` para o diretório do script
+- `hotspot.sh` lê `HOTSPOT_SSID`/`HOTSPOT_PASSWORD`/`HOTSPOT_INTERFACE` do `.env`
+
+---
+
 ## [Unreleased] — v2.0.0
 
 ### Changed

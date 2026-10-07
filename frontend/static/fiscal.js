@@ -2,6 +2,8 @@ const STORAGE_KEY = "swimtimer_fiscal";
 const OUTBOX_KEY = "swimtimer_fiscal_outbox";
 const UNDO_WINDOW_MS = 30000;
 
+const { isTerminalError, applyLaneUpdate } = window.FiscalLogic;
+
 const els = {
   offlineBanner: document.getElementById("offline-banner"),
   hdrEvent: document.getElementById("hdr-event"),
@@ -107,20 +109,29 @@ function enqueue(item) {
   showToast("Sem conexão — registro em fila", true);
 }
 
+let flushingOutbox = false;
+
 async function flushOutbox() {
-  const queue = outboxLoad();
-  if (!queue.length) return;
-  const remaining = [];
-  for (const item of queue) {
-    try {
-      await api(item.method, item.path, item.body);
-    } catch (error) {
-      if (String(error.message).includes("ja_finalizou")) continue;
-      remaining.push(item);
+  if (flushingOutbox) return;
+  flushingOutbox = true;
+  try {
+    const queue = outboxLoad();
+    if (!queue.length) return;
+    const remaining = [];
+    for (const item of queue) {
+      try {
+        await api(item.method, item.path, item.body);
+      } catch (error) {
+        // Descarta erros definitivos (4xx); mantém apenas falhas de rede/5xx.
+        if (isTerminalError(error)) continue;
+        remaining.push(item);
+      }
     }
+    outboxSave(remaining);
+    setOffline(remaining.length > 0);
+  } finally {
+    flushingOutbox = false;
   }
-  outboxSave(remaining);
-  setOffline(remaining.length > 0);
 }
 
 function setOffline(value) {
@@ -536,9 +547,27 @@ async function registerFinish() {
   els.fcRegister.textContent = "REGISTRANDO...";
   if (wsSend({ type: "finish", lane_id: lane.id })) return;
   try {
-    await api("POST", `/api/lanes/${lane.id}/finish`);
+    const result = await api("POST", `/api/lanes/${lane.id}/finish`);
+    applyLaneUpdate(lane, {
+      status: "finished",
+      finish_at: Date.now() / 1000,
+      race_time_ms: result.race_time_ms,
+      race_time_display: result.race_time_display,
+      speed_ms: result.speed_ms,
+      team: result.team_name || lane.team,
+    });
+    setRegisterPending(false);
+    applyState({ buzzer: false });
   } catch (error) {
-    if (String(error.message).includes("ja_finalizou")) return;
+    if (String(error.message).includes("ja_finalizou")) {
+      setRegisterPending(false);
+      reconcile().catch(() => {});
+      return;
+    }
+    if (isTerminalError(error)) {
+      onActionError(error.message);
+      return;
+    }
     enqueue({ method: "POST", path: `/api/lanes/${lane.id}/finish` });
   }
 }
@@ -550,8 +579,22 @@ async function registerLap() {
   els.fcRegister.textContent = "REGISTRANDO...";
   if (wsSend({ type: "lap", lane_id: lane.id })) return;
   try {
-    await api("POST", `/api/lanes/${lane.id}/lap`);
+    const result = await api("POST", `/api/lanes/${lane.id}/lap`);
+    const poolLength = eventDetail ? eventDetail.pool_length_m : 0;
+    const laps = (lane.laps || 0) + 1;
+    applyLaneUpdate(lane, {
+      laps,
+      meters: laps * poolLength,
+      last_lap_at: result.recorded_at,
+      status: lane.status === "assigned" || lane.status === "ready" ? "active" : lane.status,
+    });
+    setRegisterPending(false);
+    if (currentScreen === "racing") renderRacing();
   } catch (error) {
+    if (isTerminalError(error)) {
+      onActionError(error.message);
+      return;
+    }
     enqueue({ method: "POST", path: `/api/lanes/${lane.id}/lap` });
   }
 }
@@ -562,6 +605,14 @@ async function undoLap() {
   els.fcUndo.disabled = true;
   try {
     await api("DELETE", `/api/lanes/${lane.id}/lap/last`);
+    const poolLength = eventDetail ? eventDetail.pool_length_m : 0;
+    const laps = Math.max(0, (lane.laps || 0) - 1);
+    applyLaneUpdate(lane, {
+      laps,
+      meters: laps * poolLength,
+      last_lap_at: null,
+    });
+    renderRacing();
   } catch (error) {
     showToast(`Erro: ${error.message}`, true);
     renderRacing();
@@ -580,6 +631,8 @@ async function confirmDq() {
   if (!lane) return;
   try {
     await api("POST", `/api/lanes/${lane.id}/dq`);
+    applyLaneUpdate(lane, { status: "dq" });
+    applyState({ buzzer: false });
   } catch (error) {
     if (isNetworkError(error)) {
       enqueue({ method: "POST", path: `/api/lanes/${lane.id}/dq` });

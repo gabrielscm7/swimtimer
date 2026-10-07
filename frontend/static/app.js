@@ -6,9 +6,22 @@ class WSClient {
     this.attempts = 0;
     this.onStatusChange = null;
     this._delays = [1000, 2000, 4000, 8000, 30000];
+    this._reconnectTimer = null;
   }
 
   connect() {
+    // Evita empilhar sockets/timers quando connect() é chamado várias vezes.
+    if (
+      this.ws &&
+      (this.ws.readyState === WebSocket.OPEN ||
+        this.ws.readyState === WebSocket.CONNECTING)
+    ) {
+      return;
+    }
+    if (this._reconnectTimer) {
+      clearTimeout(this._reconnectTimer);
+      this._reconnectTimer = null;
+    }
     try {
       this.ws = new WebSocket(this.url);
     } catch (error) {
@@ -53,9 +66,13 @@ class WSClient {
   }
 
   _scheduleReconnect() {
+    if (this._reconnectTimer) return;
     const delay = this._delays[Math.min(this.attempts, this._delays.length - 1)];
     this.attempts += 1;
-    setTimeout(() => this.connect(), delay);
+    this._reconnectTimer = setTimeout(() => {
+      this._reconnectTimer = null;
+      this.connect();
+    }, delay);
   }
 
   _status(connected) {

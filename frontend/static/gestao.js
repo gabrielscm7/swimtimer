@@ -605,7 +605,7 @@ function renderSettings() {
         </div>
         <div>
           <label>Data</label>
-          <input id="set-date" type="date" value="${eventData.date || ""}" />
+          <input id="set-date" type="date" value="${escapeHtml(eventData.date || "")}" />
         </div>
         <div>
           <label>Tamanho da piscina</label>

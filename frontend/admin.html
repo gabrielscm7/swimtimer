@@ -227,7 +227,7 @@
               ? `${heat.distance_m} m`
               : `${(heat.duration_s || 0) / 3600} h`;
           const label = document.createElement("span");
-          label.innerHTML = `<strong>${heat.order_num}.</strong> ${heat.name} <span class="rank-lane">· ${type} · ${detail} · ${heat.status}</span>`;
+          label.innerHTML = `<strong>${heat.order_num}.</strong> ${escapeHtml(heat.name)} <span class="rank-lane">· ${type} · ${detail} · ${heat.status}</span>`;
           const actions = document.createElement("span");
 
           const select = document.createElement("button");

@@ -24,33 +24,55 @@ if [ ! -f "$SCRIPT_DIR/docker-compose.yml" ]; then
   exit 1
 fi
 
+# Garante o .env (clone limpo não tem o arquivo, pois é ignorado pelo git).
+bash "$SCRIPT_DIR/scripts/ensure_env.sh"
+
 # ─── ETAPA 2: Backup do banco ─────────────────────────────────────
 if [ -f "$DB_FILE" ]; then
   mkdir -p "$BACKUP_DIR"
   BACKUP_NAME="swimtimer_$(date +%Y%m%d_%H%M%S).db"
-  if cp "$DB_FILE" "$BACKUP_DIR/$BACKUP_NAME"; then
+  # sqlite3 .backup gera um snapshot consistente mesmo com o banco em uso;
+  # o cp simples fica como fallback quando o sqlite3 não está disponível.
+  if command -v sqlite3 >/dev/null 2>&1; then
+    if sqlite3 "$DB_FILE" ".backup '$BACKUP_DIR/$BACKUP_NAME'" 2>/dev/null; then
+      echo "💾 Backup criado: backups/$BACKUP_NAME"
+    fi
+  elif cp "$DB_FILE" "$BACKUP_DIR/$BACKUP_NAME"; then
     echo "💾 Backup criado: backups/$BACKUP_NAME"
   fi
   # Manter apenas os 10 backups mais recentes
-  ls -t "$BACKUP_DIR"/swimtimer_*.db 2>/dev/null | tail -n +11 | xargs rm -f 2>/dev/null || true
+  { ls -t "$BACKUP_DIR"/swimtimer_*.db 2>/dev/null | tail -n +11 | xargs -r rm -f; } || true
 else
   echo "ℹ️  Banco ainda não existe — primeira execução sem backup."
 fi
 
 # ─── ETAPA 3: Subir o servidor ────────────────────────────────────
-# Verifica se a imagem já existe em cache local
-IMAGE_NAME=$(docker compose config --images 2>/dev/null | head -1)
-IMAGE_EXISTS=$(docker images -q "$IMAGE_NAME" 2>/dev/null)
+# Decide entre usar a imagem em cache local ou reconstruir.
+IMAGE_NAME="$(docker compose config --images 2>/dev/null | head -1 || true)"
+IMAGE_EXISTS="$(docker images -q "$IMAGE_NAME" 2>/dev/null || true)"
 
-if [ -n "$IMAGE_EXISTS" ]; then
-  echo "✅ Imagem local encontrada — iniciando sem download..."
+# Hash do código-fonte: garante rebuild quando a fonte muda (evita rodar imagem velha).
+BUILD_HASH_FILE="$SCRIPT_DIR/.build_hash"
+CURRENT_HASH="$(find "$SCRIPT_DIR/backend/app" "$SCRIPT_DIR/backend/migrations" \
+  "$SCRIPT_DIR/backend/Dockerfile" "$SCRIPT_DIR/backend/requirements.txt" \
+  -type f -print0 2>/dev/null | sort -z | xargs -0 sha256sum 2>/dev/null \
+  | sha256sum | awk '{print $1}' || true)"
+PREVIOUS_HASH="$(cat "$BUILD_HASH_FILE" 2>/dev/null || true)"
+
+if [ -n "$IMAGE_EXISTS" ] && [ "$CURRENT_HASH" = "$PREVIOUS_HASH" ]; then
+  echo "✅ Imagem local em cache e código inalterado — iniciando sem build..."
   docker compose up -d || { echo "❌ Falha ao subir containers."; exit 1; }
 else
-  echo "📦 Imagem não encontrada — construindo (requer internet)..."
-  echo "   Isso acontece apenas na primeira execução."
+  if [ -z "$IMAGE_EXISTS" ]; then
+    echo "📦 Imagem não encontrada — construindo (requer internet)..."
+    echo "   Isso acontece apenas na primeira execução."
+  else
+    echo "🔧 Código-fonte alterado desde o último build — reconstruindo imagem..."
+  fi
   docker compose up --build -d || { echo "❌ Falha ao subir containers."; exit 1; }
+  printf '%s' "$CURRENT_HASH" > "$BUILD_HASH_FILE"
   echo "✅ Imagem construída e salva em cache local."
-  echo "   Próximas execuções não precisarão de internet."
+  echo "   Próximas execuções sem alteração de código não precisarão de internet."
 fi
 
 # ─── ETAPA 4: Health check em loop ────────────────────────────────
@@ -150,8 +172,8 @@ fi
 
 # ─── ETAPA 8: Acompanhar logs ─────────────────────────────────────
 echo ""
-read -r -p "Acompanhar logs em tempo real? [s/N]: " resposta
-case "$resposta" in
+read -r -p "Acompanhar logs em tempo real? [s/N]: " resposta || resposta=""
+case "${resposta:-}" in
   s|S)
     docker compose logs -f app
     ;;

@@ -11,6 +11,9 @@ env/
 # Ambiente
 .env
 
+# Marca de build do start.sh (hash do código-fonte)
+.build_hash
+
 # Banco de dados SQLite e backups
 backend/data/
 *.db

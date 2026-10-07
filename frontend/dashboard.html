@@ -171,7 +171,7 @@
             isFinished && lane.speed_ms != null ? `${lane.speed_ms} m/s` : "—";
           const row = document.createElement("tr");
           if (isFinished && position <= 3) row.classList.add(`podium-${position}`);
-          row.innerHTML = `<td class="results-pos">${position ? position + "º" : "—"}</td><td>${lane.participant_name || "—"}</td><td class="muted">${lane.team || "—"}</td><td class="results-time">${time}</td><td class="muted">${speed}</td>`;
+          row.innerHTML = `<td class="results-pos">${position ? position + "º" : "—"}</td><td>${escapeHtml(lane.participant_name || "—")}</td><td class="muted">${escapeHtml(lane.team || "—")}</td><td class="results-time">${time}</td><td class="muted">${speed}</td>`;
           tbody.appendChild(row);
         });
         els.ranking.innerHTML = "";
@@ -192,7 +192,7 @@
           row.innerHTML = `
             <div class="rank-pos">${index + 1}º</div>
             <div>
-              <div class="rank-team">${lane.team || lane.participant_name || "Sem equipe"}</div>
+              <div class="rank-team">${escapeHtml(lane.team || lane.participant_name || "Sem equipe")}</div>
               <div class="rank-lane">raia ${lane.lane_number} · ${lane.meters} m</div>
             </div>
             <div class="rank-laps">${lane.laps}</div>

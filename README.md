@@ -35,5 +35,4 @@ Acesse `http://localhost:8080`
 
 ## Versão atual
 
-`v0.3.0` — Sistema de Maratona Aquática (Python http.server + polling)  
-`v1.0.0` — Em desenvolvimento (FastAPI + WebSocket + SQLite)
+`v2.0.0` — Eventos + Provas (Event/Heat) com FastAPI + WebSocket + SQLite

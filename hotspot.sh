@@ -2,9 +2,18 @@
 set -euo pipefail
 
 # ── Configurações (editáveis) ─────────────────────────────────────
-SSID="SwimTimer"
-PASSWORD="swim2025"
-INTERFACE=""
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ENV_FILE="$SCRIPT_DIR/.env"
+if [ -f "$ENV_FILE" ]; then
+  set -a
+  # shellcheck disable=SC1090
+  . "$ENV_FILE"
+  set +a
+fi
+
+SSID="${HOTSPOT_SSID:-SwimTimer}"
+PASSWORD="${HOTSPOT_PASSWORD:-swim2025}"
+INTERFACE="${HOTSPOT_INTERFACE:-}"
 
 HOTSPOT_IP="10.42.0.1"
 
@@ -60,7 +69,7 @@ case "$CMD" in
   status)
     if ip addr show 2>/dev/null | grep -q "10.42.0.1"; then
       CLIENTS=$(nmcli connection show --active 2>/dev/null | grep -i -c "$SSID" || true)
-      echo "📡 Hotspot ATIVO — IP: $HOTSPOT_IP"
+      echo "📡 Hotspot ATIVO — IP: $HOTSPOT_IP (${CLIENTS} conexão(ões) '$SSID')"
     else
       echo "⚪ Hotspot inativo"
     fi

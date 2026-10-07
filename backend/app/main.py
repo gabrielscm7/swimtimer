@@ -1,3 +1,4 @@
+import asyncio
 import time
 from contextlib import asynccontextmanager
 
@@ -25,6 +26,29 @@ from .ws_manager import ConnectionManager
 
 START_TIME = time.time()
 manager = ConnectionManager()
+
+# Locks por prova: serializam as transições de estado de uma mesma bateria
+# (finish/lap/dq/undo/start/abort/finish) evitando corridas de escrita no
+# SQLite. O processo roda com um único worker uvicorn, então locks em memória
+# são suficientes; a constraint única em lap_event é a rede de segurança.
+_heat_locks: dict[str, asyncio.Lock] = {}
+_heat_locks_guard = asyncio.Lock()
+
+
+async def _get_heat_lock(heat_id: str) -> asyncio.Lock:
+    async with _heat_locks_guard:
+        lock = _heat_locks.get(heat_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            _heat_locks[heat_id] = lock
+        return lock
+
+
+@asynccontextmanager
+async def _heat_guard(heat_id: str):
+    lock = await _get_heat_lock(heat_id)
+    async with lock:
+        yield
 
 
 @asynccontextmanager
@@ -421,33 +445,45 @@ async def create_heat(
     payload: HeatCreate,
     session: AsyncSession = Depends(get_db),
 ) -> dict:
-    await _get_event(session, event_id)
     if payload.heat_type == "bateria" and payload.distance_m is None:
         raise HTTPException(status_code=400, detail="distance_m_obrigatorio")
     if payload.heat_type == "maratona" and payload.duration_s is None:
         raise HTTPException(status_code=400, detail="duration_s_obrigatorio")
 
-    if payload.order_num is not None:
-        order_num = payload.order_num
-    else:
-        result = await session.execute(
-            select(func.max(Heat.order_num)).where(Heat.event_id == event_id)
-        )
-        current = result.scalar_one()
-        order_num = (current or 0) + 1
+    async with _heat_guard(f"event:{event_id}"):
+        session.expire_all()
+        await _get_event(session, event_id)
+        if payload.order_num is not None:
+            order_num = payload.order_num
+            result = await session.execute(
+                select(Heat.id).where(
+                    Heat.event_id == event_id, Heat.order_num == order_num
+                )
+            )
+            if result.first() is not None:
+                raise HTTPException(
+                    status_code=400, detail="order_num_duplicado"
+                )
+        else:
+            result = await session.execute(
+                select(func.max(Heat.order_num)).where(Heat.event_id == event_id)
+            )
+            current = result.scalar_one()
+            order_num = (current or 0) + 1
 
-    heat = Heat(
-        event_id=event_id,
-        name=payload.name,
-        order_num=order_num,
-        heat_type=payload.heat_type,
-        distance_m=payload.distance_m,
-        duration_s=payload.duration_s,
-        status="scheduled",
-    )
-    session.add(heat)
-    await session.commit()
-    await session.refresh(heat)
+        heat = Heat(
+            event_id=event_id,
+            name=payload.name,
+            order_num=order_num,
+            heat_type=payload.heat_type,
+            distance_m=payload.distance_m,
+            duration_s=payload.duration_s,
+            status="scheduled",
+        )
+        session.add(heat)
+        await session.commit()
+        await session.refresh(heat)
+
     await _broadcast_server_status()
     return await _heat_payload(session, heat)
 
@@ -505,15 +541,17 @@ async def open_ready_check(
     heat_id: str,
     session: AsyncSession = Depends(get_db),
 ) -> dict:
-    heat = await _get_heat(session, heat_id)
-    if heat.status not in ("scheduled", "ready_check"):
-        raise HTTPException(status_code=409, detail="prova_nao_esta_scheduled")
-    heat.status = "ready_check"
-    await session.commit()
-    await session.refresh(heat)
-    await _broadcast_heat(session, heat)
-    await _broadcast_ready(session, heat)
-    return await _heat_payload(session, heat)
+    async with _heat_guard(heat_id):
+        session.expire_all()
+        heat = await _get_heat(session, heat_id)
+        if heat.status not in ("scheduled", "ready_check"):
+            raise HTTPException(status_code=409, detail="prova_nao_esta_scheduled")
+        heat.status = "ready_check"
+        await session.commit()
+        await session.refresh(heat)
+        await _broadcast_heat(session, heat)
+        await _broadcast_ready(session, heat)
+        return await _heat_payload(session, heat)
 
 
 @app.post("/api/heats/{heat_id}/start")
@@ -521,36 +559,40 @@ async def start_heat(
     heat_id: str,
     session: AsyncSession = Depends(get_db),
 ) -> dict:
-    heat = await _get_heat(session, heat_id)
-    direct_start = heat.status == "scheduled" and heat.heat_type == "maratona"
-    if heat.status != "ready_check" and not direct_start:
-        raise HTTPException(status_code=400, detail="prova_nao_esta_em_ready_check")
-
-    lanes = await _heat_lanes(session, heat.id)
-    participants = _participant_lanes(lanes)
-    if not participants:
-        raise HTTPException(status_code=400, detail="sem_participantes")
-    if not direct_start:
-        pending = [
-            lane.lane_number for lane in participants if lane.status != "ready"
-        ]
-        if pending:
-            listed = ", ".join(str(number) for number in pending)
+    async with _heat_guard(heat_id):
+        session.expire_all()
+        heat = await _get_heat(session, heat_id)
+        direct_start = heat.status == "scheduled" and heat.heat_type == "maratona"
+        if heat.status != "ready_check" and not direct_start:
             raise HTTPException(
-                status_code=400, detail=f"raias_pendentes: {listed}"
+                status_code=400, detail="prova_nao_esta_em_ready_check"
             )
 
-    heat.status = "active"
-    heat.started_at = time.time()
-    heat.finished_at = None
-    for lane in participants:
-        lane.status = "active"
-    await session.commit()
-    await session.refresh(heat)
-    await _broadcast_heat(session, heat)
-    await _broadcast_ready(session, heat)
-    await _broadcast_server_status()
-    return await _heat_payload(session, heat)
+        lanes = await _heat_lanes(session, heat.id)
+        participants = _participant_lanes(lanes)
+        if not participants:
+            raise HTTPException(status_code=400, detail="sem_participantes")
+        if not direct_start:
+            pending = [
+                lane.lane_number for lane in participants if lane.status != "ready"
+            ]
+            if pending:
+                listed = ", ".join(str(number) for number in pending)
+                raise HTTPException(
+                    status_code=400, detail=f"raias_pendentes: {listed}"
+                )
+
+        heat.status = "active"
+        heat.started_at = time.time()
+        heat.finished_at = None
+        for lane in participants:
+            lane.status = "active"
+        await session.commit()
+        await session.refresh(heat)
+        await _broadcast_heat(session, heat)
+        await _broadcast_ready(session, heat)
+        await _broadcast_server_status()
+        return await _heat_payload(session, heat)
 
 
 @app.post("/api/heats/{heat_id}/abort")
@@ -558,23 +600,25 @@ async def abort_heat(
     heat_id: str,
     session: AsyncSession = Depends(get_db),
 ) -> dict:
-    heat = await _get_heat(session, heat_id)
-    if heat.status not in ("ready_check", "active"):
-        raise HTTPException(status_code=409, detail="prova_nao_esta_ativa")
-    heat.status = "scheduled"
-    heat.started_at = None
-    heat.finished_at = None
-    result = await session.execute(
-        update(HeatLane)
-        .where(HeatLane.heat_id == heat.id, HeatLane.status == "active")
-        .values(status="ready")
-    )
-    await session.commit()
-    await session.refresh(heat)
-    await _broadcast_heat(session, heat)
-    await _broadcast_ready(session, heat)
-    await _broadcast_server_status()
-    return await _heat_payload(session, heat)
+    async with _heat_guard(heat_id):
+        session.expire_all()
+        heat = await _get_heat(session, heat_id)
+        if heat.status not in ("ready_check", "active"):
+            raise HTTPException(status_code=409, detail="prova_nao_esta_ativa")
+        heat.status = "scheduled"
+        heat.started_at = None
+        heat.finished_at = None
+        result = await session.execute(
+            update(HeatLane)
+            .where(HeatLane.heat_id == heat.id, HeatLane.status == "active")
+            .values(status="ready")
+        )
+        await session.commit()
+        await session.refresh(heat)
+        await _broadcast_heat(session, heat)
+        await _broadcast_ready(session, heat)
+        await _broadcast_server_status()
+        return await _heat_payload(session, heat)
 
 
 @app.post("/api/heats/{heat_id}/finish")
@@ -583,18 +627,20 @@ async def finish_heat(
     heat_id: str,
     session: AsyncSession = Depends(get_db),
 ) -> dict:
-    heat = await _get_heat(session, heat_id)
-    if heat.status == "finished":
+    async with _heat_guard(heat_id):
+        session.expire_all()
+        heat = await _get_heat(session, heat_id)
+        if heat.status == "finished":
+            return await _heat_payload(session, heat)
+        if heat.status == "scheduled":
+            raise HTTPException(status_code=409, detail="prova_nao_iniciada")
+        heat.status = "finished"
+        heat.finished_at = time.time()
+        await session.commit()
+        await session.refresh(heat)
+        await _broadcast_heat(session, heat)
+        await _broadcast_server_status()
         return await _heat_payload(session, heat)
-    if heat.status == "scheduled":
-        raise HTTPException(status_code=409, detail="prova_nao_iniciada")
-    heat.status = "finished"
-    heat.finished_at = time.time()
-    await session.commit()
-    await session.refresh(heat)
-    await _broadcast_heat(session, heat)
-    await _broadcast_server_status()
-    return await _heat_payload(session, heat)
 
 
 # --------------------------------------------------------------------------- #
@@ -606,35 +652,45 @@ async def configure_lanes(
     payload: HeatLaneConfigRequest,
     session: AsyncSession = Depends(get_db),
 ) -> dict:
-    heat = await _get_heat(session, heat_id)
-    if heat.status not in ("scheduled", "ready_check"):
-        raise HTTPException(status_code=409, detail="prova_ja_iniciada")
+    numbers = [item.lane_number for item in payload.lanes]
+    if len(numbers) != len(set(numbers)):
+        raise HTTPException(status_code=400, detail="raias_duplicadas")
 
-    existing = {lane.lane_number: lane for lane in await _heat_lanes(session, heat.id)}
-    for item in payload.lanes:
-        if item.team_id is not None:
-            team = await session.get(Team, item.team_id)
-            if team is None or team.event_id != heat.event_id:
-                raise HTTPException(status_code=404, detail="equipe_nao_encontrada")
-        lane = existing.get(item.lane_number)
-        if lane is None:
-            lane = HeatLane(
-                heat_id=heat.id,
-                lane_number=item.lane_number,
-                participant_name=item.participant_name,
-                team_id=item.team_id,
-                status="assigned",
-            )
-            session.add(lane)
-        else:
-            lane.participant_name = item.participant_name
-            lane.team_id = item.team_id
-            lane.status = "assigned"
-    await session.commit()
-    await session.refresh(heat)
-    await _broadcast_heat(session, heat)
-    await _broadcast_ready(session, heat)
-    return await _heat_payload(session, heat)
+    async with _heat_guard(heat_id):
+        session.expire_all()
+        heat = await _get_heat(session, heat_id)
+        if heat.status not in ("scheduled", "ready_check"):
+            raise HTTPException(status_code=409, detail="prova_ja_iniciada")
+
+        existing = {
+            lane.lane_number: lane for lane in await _heat_lanes(session, heat.id)
+        }
+        for item in payload.lanes:
+            if item.team_id is not None:
+                team = await session.get(Team, item.team_id)
+                if team is None or team.event_id != heat.event_id:
+                    raise HTTPException(
+                        status_code=404, detail="equipe_nao_encontrada"
+                    )
+            lane = existing.get(item.lane_number)
+            if lane is None:
+                lane = HeatLane(
+                    heat_id=heat.id,
+                    lane_number=item.lane_number,
+                    participant_name=item.participant_name,
+                    team_id=item.team_id,
+                    status="assigned",
+                )
+                session.add(lane)
+            else:
+                lane.participant_name = item.participant_name
+                lane.team_id = item.team_id
+                lane.status = "assigned"
+        await session.commit()
+        await session.refresh(heat)
+        await _broadcast_heat(session, heat)
+        await _broadcast_ready(session, heat)
+        return await _heat_payload(session, heat)
 
 
 @app.patch("/api/lanes/{lane_id}")
@@ -644,31 +700,33 @@ async def update_lane(
     session: AsyncSession = Depends(get_db),
 ) -> dict:
     lane = await _get_lane(session, lane_id)
-    heat = await _get_heat(session, lane.heat_id)
-    if heat.status not in ("scheduled", "ready_check"):
-        raise HTTPException(status_code=409, detail="prova_ja_iniciada")
-    data = payload.model_dump(exclude_unset=True)
-    if data.get("team_id") is not None:
-        team = await session.get(Team, data["team_id"])
-        if team is None or team.event_id != heat.event_id:
-            raise HTTPException(status_code=404, detail="equipe_nao_encontrada")
-    for field, value in data.items():
-        setattr(lane, field, value)
-    lane.status = "assigned"
-    await session.commit()
-    await session.refresh(lane)
-    await _broadcast_heat(session, heat)
-    await _broadcast_ready(session, heat)
-    return _lane_dict(
-        lane,
-        heat=heat,
-        pool_length_m=(await session.get(Event, heat.event_id)).pool_length_m,
-        team_name=(
-            (await session.get(Team, lane.team_id)).name
-            if lane.team_id
-            else None
-        ),
-    )
+    async with _heat_guard(lane.heat_id):
+        session.expire_all()
+        lane = await _get_lane(session, lane_id)
+        heat = await _get_heat(session, lane.heat_id)
+        if heat.status not in ("scheduled", "ready_check"):
+            raise HTTPException(status_code=409, detail="prova_ja_iniciada")
+        data = payload.model_dump(exclude_unset=True)
+        if data.get("team_id") is not None:
+            team = await session.get(Team, data["team_id"])
+            if team is None or team.event_id != heat.event_id:
+                raise HTTPException(status_code=404, detail="equipe_nao_encontrada")
+        for field, value in data.items():
+            setattr(lane, field, value)
+        if data:
+            lane.status = "assigned"
+        await session.commit()
+        await session.refresh(lane)
+        event = await session.get(Event, heat.event_id)
+        team = await session.get(Team, lane.team_id) if lane.team_id else None
+        await _broadcast_heat(session, heat)
+        await _broadcast_ready(session, heat)
+        return _lane_dict(
+            lane,
+            heat=heat,
+            pool_length_m=event.pool_length_m if event else 0,
+            team_name=team.name if team else None,
+        )
 
 
 @app.post("/api/lanes/{lane_id}/ready")
@@ -677,20 +735,26 @@ async def lane_ready(
     session: AsyncSession = Depends(get_db),
 ) -> dict:
     lane = await _get_lane(session, lane_id)
-    heat = await _get_heat(session, lane.heat_id)
-    if heat.status != "ready_check":
-        raise HTTPException(status_code=400, detail="prova_nao_esta_em_ready_check")
-    lane.status = "ready"
-    await session.commit()
-    await session.refresh(lane)
-    await _broadcast_heat(session, heat)
-    await _broadcast_ready(session, heat)
-    return _lane_dict(
-        lane,
-        heat=heat,
-        pool_length_m=(await session.get(Event, heat.event_id)).pool_length_m,
-        team_name=None,
-    )
+    async with _heat_guard(lane.heat_id):
+        session.expire_all()
+        lane = await _get_lane(session, lane_id)
+        heat = await _get_heat(session, lane.heat_id)
+        if heat.status != "ready_check":
+            raise HTTPException(
+                status_code=400, detail="prova_nao_esta_em_ready_check"
+            )
+        lane.status = "ready"
+        await session.commit()
+        await session.refresh(lane)
+        event = await session.get(Event, heat.event_id)
+        await _broadcast_heat(session, heat)
+        await _broadcast_ready(session, heat)
+        return _lane_dict(
+            lane,
+            heat=heat,
+            pool_length_m=event.pool_length_m if event else 0,
+            team_name=None,
+        )
 
 
 class LaneActionError(Exception):
@@ -704,81 +768,98 @@ async def _do_finish(session: AsyncSession, lane_id: str) -> dict:
     lane = await session.get(HeatLane, lane_id)
     if lane is None:
         raise LaneActionError(404, "raia_nao_encontrada")
-    heat = await session.get(Heat, lane.heat_id)
-    if heat is None:
-        raise LaneActionError(404, "prova_nao_encontrada")
-    if heat.heat_type != "bateria":
-        raise LaneActionError(400, "nao_e_bateria")
-    if lane.finish_at is not None:
-        raise LaneActionError(409, "ja_finalizou")
-    if heat.status != "active":
-        raise LaneActionError(400, "prova_nao_ativa")
-    if heat.started_at is None:
-        raise LaneActionError(400, "prova_nao_iniciada")
+    heat_id = lane.heat_id
 
-    finish_at = time.time()
-    lane.finish_at = finish_at
-    lane.race_time_ms = int((finish_at - heat.started_at) * 1000)
-    lane.status = "finished"
-    all_finished = await _maybe_finish_heat(session, heat)
-    await session.commit()
-    await session.refresh(lane)
-    await _broadcast_heat(session, heat)
-    if all_finished:
-        await _broadcast_server_status()
+    async with _heat_guard(heat_id):
+        session.expire_all()
+        lane = await session.get(HeatLane, lane_id)
+        if lane is None:
+            raise LaneActionError(404, "raia_nao_encontrada")
+        heat = await session.get(Heat, heat_id)
+        if heat is None:
+            raise LaneActionError(404, "prova_nao_encontrada")
+        if heat.heat_type != "bateria":
+            raise LaneActionError(400, "nao_e_bateria")
+        if lane.finish_at is not None:
+            raise LaneActionError(409, "ja_finalizou")
+        if heat.status != "active":
+            raise LaneActionError(400, "prova_nao_ativa")
+        if heat.started_at is None:
+            raise LaneActionError(400, "prova_nao_iniciada")
 
-    team_name = None
-    if lane.team_id:
-        team = await session.get(Team, lane.team_id)
-        team_name = team.name if team else None
-    return {
-        "lane_id": lane.id,
-        "lane_number": lane.lane_number,
-        "participant_name": lane.participant_name,
-        "team_name": team_name,
-        "race_time_ms": lane.race_time_ms,
-        "race_time_display": format_race_time(lane.race_time_ms),
-        "speed_ms": compute_speed(heat.distance_m, lane.race_time_ms) or 0.0,
-    }
+        finish_at = time.time()
+        lane.finish_at = finish_at
+        lane.race_time_ms = int((finish_at - heat.started_at) * 1000)
+        lane.status = "finished"
+        all_finished = await _maybe_finish_heat(session, heat)
+        await session.commit()
+        await session.refresh(lane)
+
+        team_name = None
+        if lane.team_id:
+            team = await session.get(Team, lane.team_id)
+            team_name = team.name if team else None
+
+        await _broadcast_heat(session, heat)
+        if all_finished:
+            await _broadcast_server_status()
+
+        return {
+            "lane_id": lane.id,
+            "lane_number": lane.lane_number,
+            "participant_name": lane.participant_name,
+            "team_name": team_name,
+            "race_time_ms": lane.race_time_ms,
+            "race_time_display": format_race_time(lane.race_time_ms),
+            "speed_ms": compute_speed(heat.distance_m, lane.race_time_ms) or 0.0,
+        }
 
 
 async def _do_lap(session: AsyncSession, lane_id: str) -> dict:
     lane = await session.get(HeatLane, lane_id)
     if lane is None:
         raise LaneActionError(404, "raia_nao_encontrada")
-    heat = await session.get(Heat, lane.heat_id)
-    if heat is None:
-        raise LaneActionError(404, "prova_nao_encontrada")
-    if heat.heat_type != "maratona":
-        raise LaneActionError(400, "nao_e_maratona")
-    if heat.status != "active":
-        raise LaneActionError(400, "prova_nao_ativa")
+    heat_id = lane.heat_id
 
-    result = await session.execute(
-        select(func.count(LapEvent.id)).where(
-            LapEvent.lane_id == lane.id, LapEvent.is_undo.is_(False)
+    async with _heat_guard(heat_id):
+        session.expire_all()
+        lane = await session.get(HeatLane, lane_id)
+        if lane is None:
+            raise LaneActionError(404, "raia_nao_encontrada")
+        heat = await session.get(Heat, heat_id)
+        if heat is None:
+            raise LaneActionError(404, "prova_nao_encontrada")
+        if heat.heat_type != "maratona":
+            raise LaneActionError(400, "nao_e_maratona")
+        if heat.status != "active":
+            raise LaneActionError(400, "prova_nao_ativa")
+
+        result = await session.execute(
+            select(func.max(LapEvent.lap_number)).where(
+                LapEvent.lane_id == lane.id
+            )
         )
-    )
-    lap_number = int(result.scalar_one()) + 1
-    event = LapEvent(
-        lane_id=lane.id,
-        lap_number=lap_number,
-        recorded_at=time.time(),
-        is_undo=False,
-    )
-    session.add(event)
-    if lane.status in ("assigned", "ready"):
-        lane.status = "active"
-    await session.commit()
-    await session.refresh(event)
-    await _broadcast_heat(session, heat)
-    return {
-        "id": event.id,
-        "lane_id": event.lane_id,
-        "lap_number": event.lap_number,
-        "recorded_at": event.recorded_at,
-        "is_undo": event.is_undo,
-    }
+        current = result.scalar_one()
+        lap_number = int(current or 0) + 1
+        event = LapEvent(
+            lane_id=lane.id,
+            lap_number=lap_number,
+            recorded_at=time.time(),
+            is_undo=False,
+        )
+        session.add(event)
+        if lane.status in ("assigned", "ready"):
+            lane.status = "active"
+        await session.commit()
+        await session.refresh(event)
+        await _broadcast_heat(session, heat)
+        return {
+            "id": event.id,
+            "lane_id": event.lane_id,
+            "lap_number": event.lap_number,
+            "recorded_at": event.recorded_at,
+            "is_undo": event.is_undo,
+        }
 
 
 @app.post("/api/lanes/{lane_id}/finish")
@@ -809,22 +890,26 @@ async def lane_dq(
     session: AsyncSession = Depends(get_db),
 ) -> dict:
     lane = await _get_lane(session, lane_id)
-    heat = await _get_heat(session, lane.heat_id)
-    if heat.status != "active":
-        raise HTTPException(status_code=400, detail="prova_nao_ativa")
-    lane.status = "dq"
-    all_finished = await _maybe_finish_heat(session, heat)
-    await session.commit()
-    await session.refresh(lane)
-    await _broadcast_heat(session, heat)
-    if all_finished:
-        await _broadcast_server_status()
-    return _lane_dict(
-        lane,
-        heat=heat,
-        pool_length_m=(await session.get(Event, heat.event_id)).pool_length_m,
-        team_name=None,
-    )
+    async with _heat_guard(lane.heat_id):
+        session.expire_all()
+        lane = await _get_lane(session, lane_id)
+        heat = await _get_heat(session, lane.heat_id)
+        if heat.status != "active":
+            raise HTTPException(status_code=400, detail="prova_nao_ativa")
+        lane.status = "dq"
+        all_finished = await _maybe_finish_heat(session, heat)
+        await session.commit()
+        await session.refresh(lane)
+        event = await session.get(Event, heat.event_id)
+        await _broadcast_heat(session, heat)
+        if all_finished:
+            await _broadcast_server_status()
+        return _lane_dict(
+            lane,
+            heat=heat,
+            pool_length_m=event.pool_length_m,
+            team_name=None,
+        )
 
 
 @app.delete("/api/lanes/{lane_id}/lap/last")
@@ -833,30 +918,33 @@ async def undo_last_lap(
     session: AsyncSession = Depends(get_db),
 ) -> dict:
     lane = await _get_lane(session, lane_id)
-    heat = await _get_heat(session, lane.heat_id)
-    result = await session.execute(
-        select(LapEvent)
-        .where(LapEvent.lane_id == lane_id, LapEvent.is_undo.is_(False))
-        .order_by(LapEvent.recorded_at.desc())
-        .limit(1)
-    )
-    event = result.scalars().first()
-    if event is None:
-        raise HTTPException(status_code=404, detail="nenhum_lap")
-    if time.time() - event.recorded_at >= 30.0:
-        raise HTTPException(status_code=400, detail="fora_do_prazo")
-    event.is_undo = True
-    if lane.status == "active":
+    async with _heat_guard(lane.heat_id):
+        session.expire_all()
+        lane = await _get_lane(session, lane_id)
+        heat = await _get_heat(session, lane.heat_id)
         result = await session.execute(
-            select(func.count(LapEvent.id)).where(
-                LapEvent.lane_id == lane.id, LapEvent.is_undo.is_(False)
-            )
+            select(LapEvent)
+            .where(LapEvent.lane_id == lane_id, LapEvent.is_undo.is_(False))
+            .order_by(LapEvent.recorded_at.desc())
+            .limit(1)
         )
-        if int(result.scalar_one()) == 0:
-            lane.status = "assigned"
-    await session.commit()
-    await _broadcast_heat(session, heat)
-    return {"status": "undone", "lane_id": lane.id}
+        event = result.scalars().first()
+        if event is None:
+            raise HTTPException(status_code=404, detail="nenhum_lap")
+        if time.time() - event.recorded_at >= 30.0:
+            raise HTTPException(status_code=400, detail="fora_do_prazo")
+        event.is_undo = True
+        if lane.status == "active":
+            result = await session.execute(
+                select(func.count(LapEvent.id)).where(
+                    LapEvent.lane_id == lane.id, LapEvent.is_undo.is_(False)
+                )
+            )
+            if int(result.scalar_one()) == 0:
+                lane.status = "assigned"
+        await session.commit()
+        await _broadcast_heat(session, heat)
+        return {"status": "undone", "lane_id": lane.id}
 
 
 # --------------------------------------------------------------------------- #
@@ -883,6 +971,11 @@ async def _handle_ws_message(data: dict, websocket: WebSocket) -> None:
             await manager.send_to(
                 websocket,
                 {"type": "error", "message": exc.detail, "lane_id": lane_id},
+            )
+        except Exception:
+            await manager.send_to(
+                websocket,
+                {"type": "error", "message": "erro_interno", "lane_id": lane_id},
             )
 
 
@@ -912,12 +1005,18 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                     websocket, {"type": "error", "message": "mensagem_invalida"}
                 )
                 continue
-            await _handle_ws_message(data, websocket)
+            try:
+                await _handle_ws_message(data, websocket)
+            except Exception:
+                await manager.send_to(
+                    websocket, {"type": "error", "message": "erro_interno"}
+                )
     except WebSocketDisconnect:
         manager.disconnect(websocket)
         await _broadcast_server_status()
     except Exception:
         manager.disconnect(websocket)
+        await _broadcast_server_status()
 
 
 # --------------------------------------------------------------------------- #

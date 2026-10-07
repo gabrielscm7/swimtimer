@@ -3,6 +3,7 @@ from collections.abc import AsyncGenerator
 
 from alembic import command
 from alembic.config import Config
+from sqlalchemy import event
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
@@ -26,6 +27,16 @@ else:
     _engine_kwargs["connect_args"] = {"timeout": 30}
 
 engine = create_async_engine(settings.DATABASE_URL, **_engine_kwargs)
+
+if ":memory:" not in settings.DATABASE_URL:
+
+    @event.listens_for(engine.sync_engine, "connect")
+    def _configure_sqlite(dbapi_connection, connection_record) -> None:
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA busy_timeout=5000")
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
 
 AsyncSessionLocal = async_sessionmaker(
     bind=engine,

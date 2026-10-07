@@ -153,3 +153,84 @@ async def test_event_delete_only_when_draft(client):
     await client.patch(f"/api/events/{event['id']}", json={"status": "active"})
     blocked = await client.delete(f"/api/events/{event['id']}")
     assert blocked.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_configure_lanes_rejects_duplicate_numbers(client):
+    event = await create_event(client)
+    heat = await create_heat(client, event["id"])
+    response = await client.post(
+        f"/api/heats/{heat['id']}/lanes",
+        json={
+            "lanes": [
+                {"lane_number": 1, "participant_name": "Ana"},
+                {"lane_number": 1, "participant_name": "Bia"},
+            ]
+        },
+    )
+    assert response.status_code == 400, response.text
+    assert response.json()["detail"] == "raias_duplicadas"
+
+
+@pytest.mark.asyncio
+async def test_configure_lanes_partial_upsert_keeps_others(client):
+    event = await create_event(client)
+    heat = await create_heat(client, event["id"])
+    await configure_lanes(client, heat["id"], [(1, "Ana"), (2, "Bia")])
+
+    response = await client.post(
+        f"/api/heats/{heat['id']}/lanes",
+        json={"lanes": [{"lane_number": 1, "participant_name": "Ana Maria"}]},
+    )
+    assert response.status_code == 200, response.text
+    numbers = sorted(lane["lane_number"] for lane in response.json()["heat_lanes"])
+    assert numbers == [1, 2]
+
+
+@pytest.mark.asyncio
+async def test_patch_lane_empty_body_keeps_status(client):
+    event = await create_event(client)
+    heat = await create_heat(client, event["id"])
+    await configure_lanes(client, heat["id"], [(1, "Ana")])
+    await client.post(f"/api/heats/{heat['id']}/open-ready-check")
+    heat = (await client.get(f"/api/events/{event['id']}/heats")).json()[0]
+    lane = heat["heat_lanes"][0]
+    await client.post(f"/api/lanes/{lane['id']}/ready")
+
+    response = await client.patch(f"/api/lanes/{lane['id']}", json={})
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "ready"
+
+
+@pytest.mark.asyncio
+async def test_patch_lane_participant_resets_to_assigned(client):
+    event = await create_event(client)
+    heat = await create_heat(client, event["id"])
+    await configure_lanes(client, heat["id"], [(1, "Ana")])
+    await client.post(f"/api/heats/{heat['id']}/open-ready-check")
+    heat = (await client.get(f"/api/events/{event['id']}/heats")).json()[0]
+    lane = heat["heat_lanes"][0]
+    await client.post(f"/api/lanes/{lane['id']}/ready")
+
+    response = await client.patch(
+        f"/api/lanes/{lane['id']}", json={"participant_name": "Ana Maria"}
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "assigned"
+
+
+@pytest.mark.asyncio
+async def test_create_heat_duplicate_order_num_rejected(client):
+    event = await create_event(client)
+    await create_heat(client, event["id"], order_num=2)
+    response = await client.post(
+        f"/api/events/{event['id']}/heats",
+        json={
+            "name": "Outra",
+            "heat_type": "bateria",
+            "distance_m": 25,
+            "order_num": 2,
+        },
+    )
+    assert response.status_code == 400, response.text
+    assert response.json()["detail"] == "order_num_duplicado"
