@@ -4,6 +4,52 @@ Formato: [Semantic Versioning](https://semver.org/lang/pt-BR/)
 
 ---
 
+## [2.2.0] — 2026-10-21
+
+### Added
+- Entidade `Athlete` por evento (`athlete`): `name`, `team_id` opcional,
+  `naipe` (M/F validado e normalizado) e `category` (normalizada em maiúsculas),
+  com `created_at`/`updated_at` e unicidade por evento+nome+equipe
+  (case-insensitive, `COALESCE` para atletas sem equipe)
+- Migração `0005_athlete`: cria `athlete`, adiciona `heat_lane.athlete_id`
+  (FK opcional, compatível com `participant_name` legado) e índices de busca
+- API de atletas: CRUD + listagem paginada com filtros (`q`, `team_id`,
+  `naipe`, `category`) e isolamento por evento
+- Importação de planilhas CSV/XLSX (`NOME, EQUIPE, NAIPE, CATEGORIA`) com
+  detecção de delimitador, suporte a BOM/Latin-1, aliases de naipe, criação
+  automática de equipes, política parcial com relatório `{line, field, message}`
+  e limites de 2 MB/1000 linhas
+- Download de modelo (CSV/XLSX) e exportação CSV dos atletas do evento
+- Aba **Atletas** na gestão: busca, filtros, paginação, edição/exclusão,
+  importação por upload ou arrastar-e-soltar e relatório de importação
+- Autocomplete de atletas cadastrados nas raias; ao selecionar, equipe é
+  preenchida automaticamente (entrada manual continua suportada)
+- `athlete_count` agregado em `GET /api/events/{id}/teams` e no payload do evento
+- Evento WebSocket `athletes_changed` (scope `event`)
+- Testes de atletas, importação (CSV/XLSX, 200 atletas, relatório parcial),
+  migração 0005 com dados legados e lógica frontend (`gestao_logic`)
+
+### Changed
+- `configure_lanes`/`update_lane` aceitam `athlete_id`; nome e equipe da raia
+  passam a ser derivados do atleta (fonte única de verdade) e sincronizados em
+  `participant_name`/`team_id` para fiscal/supervisor/público
+- Exclusão de equipe também é bloqueada quando há atletas vinculados (`409 equipe_em_uso`)
+- Exclusão de evento remove atletas antes de equipes (integridade referencial)
+- `GET /api/events/{id}/teams` e `EventDetail` agora incluem `athlete_count`
+- Frontend: contagem por equipe usa agregação do backend; visão geral mostra
+  atletas inscritos e atletas em raias separadamente
+
+### Removed
+- `POST /api/events/{id}/heats` (rota legada prova+bateria 1:1); use
+  `POST /api/provas/{id}/heats`
+- `POST /api/heats/{id}/finish-marathon` (alias duplicado; use `/finish`)
+- `admin.html` e `dashboard.html` (descontinuados; gestão e `publico.html` cobrem)
+- `RESET_PASSWORD` (configuração órfã sem endpoint)
+- Schemas de resposta agora são vinculados às rotas de equipes/atletas
+
+### Fixed
+- Sincronização de nome/equipe da raia ao editar um atleta já alocado
+
 ## [2.1.0] — 2026-10-21
 
 ### Added

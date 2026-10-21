@@ -8,7 +8,13 @@ def _create_event(ws_client, name="Evento WS"):
 
 def _create_heat(ws_client, event_id):
     response = ws_client.post(
-        f"/api/events/{event_id}/heats",
+        f"/api/events/{event_id}/provas",
+        json={"name": "Bateria 1", "distance_m": 25},
+    )
+    assert response.status_code == 201, response.text
+    prova = response.json()
+    response = ws_client.post(
+        f"/api/provas/{prova['id']}/heats",
         json={"name": "Bateria 1", "heat_type": "bateria", "distance_m": 25},
     )
     assert response.status_code == 201, response.text

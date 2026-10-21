@@ -140,5 +140,70 @@ def test_migration_fresh_db_has_unique_constraint(tmp_path, monkeypatch):
         row[0]
         for row in con.execute("SELECT name FROM sqlite_master WHERE type='table'")
     }
-    assert {"event", "heat", "heat_lane", "lap_event"} <= tables
+    assert {"event", "heat", "heat_lane", "lap_event", "athlete"} <= tables
     con.close()
+
+
+def test_migration_0005_preserves_legacy_lanes(tmp_path, monkeypatch):
+    db = tmp_path / "legacy_athlete.db"
+    monkeypatch.setattr(
+        settings, "DATABASE_URL", f"sqlite+aiosqlite:///{db}"
+    )
+    config = _alembic_config()
+
+    command.upgrade(config, "0004_team_logo")
+
+    con = sqlite3.connect(db)
+    con.execute(
+        "INSERT INTO event (id, name, pool_length_m, status, created_at) "
+        "VALUES ('e1', 'Evento', 25, 'draft', 0)"
+    )
+    con.execute(
+        "INSERT INTO team (id, event_id, name) VALUES ('t1', 'e1', 'Equipe')"
+    )
+    con.execute(
+        "INSERT INTO prova (id, event_id, name, order_num, "
+        "consolidate_results, classification_criterion, status, created_at) "
+        "VALUES ('p1', 'e1', 'Prova', 1, 1, 'lowest_time', 'scheduled', 0)"
+    )
+    con.execute(
+        "INSERT INTO heat (id, event_id, prova_id, name, order_num, "
+        "heat_type, status) "
+        "VALUES ('h1', 'e1', 'p1', 'Bateria', 1, 'bateria', 'scheduled')"
+    )
+    con.execute(
+        "INSERT INTO heat_lane (id, heat_id, lane_number, "
+        "participant_name, team_id, status) "
+        "VALUES ('l1', 'h1', 1, 'Atleta Legado', 't1', 'assigned')"
+    )
+    con.commit()
+    con.close()
+
+    command.upgrade(config, "head")
+
+    con = sqlite3.connect(db)
+    lane = con.execute(
+        "SELECT participant_name, athlete_id FROM heat_lane WHERE id='l1'"
+    ).fetchone()
+    assert lane == ("Atleta Legado", None)
+
+    con.execute(
+        "INSERT INTO athlete (id, event_id, team_id, name, naipe, "
+        "category, created_at) "
+        "VALUES ('a1', 'e1', 't1', 'Ana', 'F', 'SUB-12', 0)"
+    )
+    con.commit()
+
+    duplicate_blocked = False
+    try:
+        con.execute(
+            "INSERT INTO athlete (id, event_id, team_id, name, naipe, "
+            "category, created_at) "
+            "VALUES ('a2', 'e1', 't1', 'ana', 'F', 'SUB-12', 0)"
+        )
+        con.commit()
+    except sqlite3.IntegrityError:
+        duplicate_blocked = True
+    finally:
+        con.close()
+    assert duplicate_blocked, "indice unico de atleta nao foi aplicado"

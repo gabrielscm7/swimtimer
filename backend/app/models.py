@@ -8,6 +8,7 @@ from sqlalchemy import (
     Integer,
     String,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -42,6 +43,10 @@ class Event(Base):
         back_populates="event",
         cascade="all, delete-orphan",
         order_by="Heat.order_num",
+    )
+    athletes: Mapped[list["Athlete"]] = relationship(
+        back_populates="event",
+        cascade="all, delete-orphan",
     )
 
 
@@ -97,6 +102,48 @@ class Team(Base):
 
     event: Mapped["Event"] = relationship(back_populates="teams")
     lanes: Mapped[list["HeatLane"]] = relationship(back_populates="team")
+    athletes: Mapped[list["Athlete"]] = relationship(back_populates="team")
+
+
+class Athlete(Base):
+    """Atleta inscrito em um evento, independente das baterias.
+
+    A alocacao em raia referencia o atleta por `heat_lane.athlete_id`; nome e
+    equipe exibidos na raia sao derivados deste registro (fonte unica de
+    verdade), evitando divergencia de dados entre cadastro e prova.
+    """
+
+    __tablename__ = "athlete"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    event_id: Mapped[str] = mapped_column(
+        ForeignKey("event.id"), nullable=False
+    )
+    team_id: Mapped[str | None] = mapped_column(
+        ForeignKey("team.id"), nullable=True
+    )
+    name: Mapped[str] = mapped_column(String, nullable=False)
+    naipe: Mapped[str] = mapped_column(String, nullable=False)
+    category: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_at: Mapped[float] = mapped_column(Float, nullable=False)
+    updated_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    event: Mapped["Event"] = relationship(back_populates="athletes")
+    team: Mapped["Team | None"] = relationship(back_populates="athletes")
+    lanes: Mapped[list["HeatLane"]] = relationship(back_populates="athlete")
+
+    __table_args__ = (
+        Index("ix_athlete_event", "event_id"),
+        Index("ix_athlete_event_team", "event_id", "team_id"),
+        Index("ix_athlete_event_name", "event_id", "name"),
+        Index(
+            "uq_athlete_event_name_team",
+            text("event_id"),
+            text("name COLLATE NOCASE"),
+            text("COALESCE(team_id, '')"),
+            unique=True,
+        ),
+    )
 
 
 class Heat(Base):
@@ -146,6 +193,9 @@ class HeatLane(Base):
     )
     lane_number: Mapped[int] = mapped_column(Integer, nullable=False)
     participant_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    athlete_id: Mapped[str | None] = mapped_column(
+        ForeignKey("athlete.id"), nullable=True
+    )
     team_id: Mapped[str | None] = mapped_column(
         ForeignKey("team.id"), nullable=True
     )
@@ -156,6 +206,7 @@ class HeatLane(Base):
     race_time_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     heat: Mapped["Heat"] = relationship(back_populates="lanes")
+    athlete: Mapped["Athlete | None"] = relationship(back_populates="lanes")
     team: Mapped["Team | None"] = relationship(back_populates="lanes")
     lap_events: Mapped[list["LapEvent"]] = relationship(
         back_populates="lane",

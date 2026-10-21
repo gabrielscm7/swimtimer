@@ -35,6 +35,8 @@ Acesse `http://localhost:8080`
 
 ## Versão atual
 
-`v2.1.0` — Eventos → Provas → Baterias, classificação consolidada e logos
+`v2.2.0` — Gestão de equipes e atletas com importação de planilhas (CSV/XLSX)
 
 Hierarquia: **Evento → Prova → Bateria → Raia/Atleta → Resultado**.
+Atletas são cadastrados por evento (nome, equipe, naipe e categoria) e podem ser
+selecionados nas raias; a importação de planilhas preenche toda a equipe de uma vez.

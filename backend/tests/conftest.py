@@ -100,6 +100,27 @@ async def create_team(
     return response.json()
 
 
+async def create_athlete(
+    client: AsyncClient,
+    event_id: str,
+    *,
+    name: str = "Atleta Teste",
+    naipe: str = "M",
+    category: str | None = None,
+    team_id: str | None = None,
+) -> dict:
+    body: dict = {"name": name, "naipe": naipe}
+    if category is not None:
+        body["category"] = category
+    if team_id is not None:
+        body["team_id"] = team_id
+    response = await client.post(
+        f"/api/events/{event_id}/athletes", json=body
+    )
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
 async def create_heat(
     client: AsyncClient,
     event_id: str,
@@ -117,7 +138,18 @@ async def create_heat(
         body["duration_s"] = duration_s
     if order_num is not None:
         body["order_num"] = order_num
-    response = await client.post(f"/api/events/{event_id}/heats", json=body)
+    prova_body: dict = {"name": name}
+    if distance_m is not None:
+        prova_body["distance_m"] = distance_m
+    if order_num is not None:
+        prova_body["order_num"] = order_num
+    prova_response = await client.post(
+        f"/api/events/{event_id}/provas", json=prova_body
+    )
+    assert prova_response.status_code == 201, prova_response.text
+    prova = prova_response.json()
+    body["order_num"] = 1
+    response = await client.post(f"/api/provas/{prova['id']}/heats", json=body)
     assert response.status_code == 201, response.text
     return response.json()
 

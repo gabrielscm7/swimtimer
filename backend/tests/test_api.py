@@ -17,7 +17,7 @@ from tests.conftest import (
 async def test_health(client):
     response = await client.get("/api/health")
     assert response.status_code == 200
-    assert response.json() == {"status": "ok", "version": "2.0.0"}
+    assert response.json() == {"status": "ok", "version": "2.2.0"}
 
 
 @pytest.mark.asyncio
@@ -224,9 +224,10 @@ async def test_patch_lane_participant_resets_to_assigned(client):
 @pytest.mark.asyncio
 async def test_create_heat_duplicate_order_num_rejected(client):
     event = await create_event(client)
-    await create_heat(client, event["id"], order_num=2)
+    prova = await create_prova(client, event["id"])
+    await create_heat_in_prova(client, prova["id"], order_num=2)
     response = await client.post(
-        f"/api/events/{event['id']}/heats",
+        f"/api/provas/{prova['id']}/heats",
         json={
             "name": "Outra",
             "heat_type": "bateria",

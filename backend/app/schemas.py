@@ -7,6 +7,32 @@ HeatType = Literal["maratona", "bateria"]
 HeatStatus = Literal["scheduled", "ready_check", "active", "finished"]
 LaneStatus = Literal["assigned", "ready", "active", "finished", "dq"]
 ClassificationCriterion = Literal["lowest_time"]
+Naipe = Literal["M", "F"]
+
+_NAIPE_ALIASES = {
+    "M": "M",
+    "MASC": "M",
+    "MAS": "M",
+    "MASCULINO": "M",
+    "F": "F",
+    "FEM": "F",
+    "FEMININO": "F",
+    "FEMININA": "F",
+}
+
+
+def normalize_naipe(value: object) -> object:
+    if isinstance(value, str):
+        return _NAIPE_ALIASES.get(value.strip().upper(), value.strip().upper())
+    return value
+
+
+def normalize_category(value: object) -> object:
+    if isinstance(value, str):
+        cleaned = value.strip().upper()
+        return cleaned or None
+    return value
+
 
 
 def format_race_time(race_time_ms: int | None) -> str | None:
@@ -145,6 +171,90 @@ class ClassificationResponse(BaseModel):
 
 
 # --------------------------------------------------------------------------- #
+# Athlete
+# --------------------------------------------------------------------------- #
+class AthleteCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    naipe: Naipe
+    category: Optional[str] = Field(default=None, max_length=60)
+    team_id: Optional[str] = None
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def _trim_name(cls, value: object) -> object:
+        if isinstance(value, str):
+            return value.strip()
+        return value
+
+    @field_validator("naipe", mode="before")
+    @classmethod
+    def _normalize_naipe(cls, value: object) -> object:
+        return normalize_naipe(value)
+
+    @field_validator("category", mode="before")
+    @classmethod
+    def _normalize_category(cls, value: object) -> object:
+        return normalize_category(value)
+
+
+class AthleteUpdate(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=120)
+    naipe: Optional[Naipe] = None
+    category: Optional[str] = Field(default=None, max_length=60)
+    team_id: Optional[str] = None
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def _trim_name(cls, value: object) -> object:
+        if isinstance(value, str):
+            return value.strip()
+        return value
+
+    @field_validator("naipe", mode="before")
+    @classmethod
+    def _normalize_naipe(cls, value: object) -> object:
+        return normalize_naipe(value)
+
+    @field_validator("category", mode="before")
+    @classmethod
+    def _normalize_category(cls, value: object) -> object:
+        return normalize_category(value)
+
+
+class AthleteResponse(BaseModel):
+    id: str
+    event_id: str
+    team_id: str | None = None
+    name: str
+    naipe: str
+    category: str | None = None
+    created_at: float
+    updated_at: float | None = None
+    team_name: str | None = None
+    team_logo_url: str | None = None
+
+
+class AthleteImportError(BaseModel):
+    line: int
+    field: str | None = None
+    message: str
+
+
+class AthleteImportResult(BaseModel):
+    created_athletes: int
+    created_teams: int
+    skipped: int
+    errors: list[AthleteImportError] = Field(default_factory=list)
+
+
+class AthleteListResponse(BaseModel):
+    items: list[AthleteResponse]
+    total: int
+    limit: int
+    offset: int
+
+
+# --------------------------------------------------------------------------- #
 # Team
 # --------------------------------------------------------------------------- #
 class TeamCreate(BaseModel):
@@ -162,6 +272,7 @@ class TeamResponse(BaseModel):
     event_id: str
     name: str
     logo_url: str | None = None
+    athlete_count: int = 0
 
 
 # --------------------------------------------------------------------------- #
@@ -212,6 +323,7 @@ class HeatResponse(BaseModel):
 class HeatLaneConfigItem(BaseModel):
     lane_number: int = Field(ge=1, le=8)
     participant_name: Optional[str] = Field(default=None, max_length=200)
+    athlete_id: Optional[str] = None
     team_id: Optional[str] = None
 
 
@@ -221,6 +333,7 @@ class HeatLaneConfigRequest(BaseModel):
 
 class LaneUpdate(BaseModel):
     participant_name: Optional[str] = Field(default=None, max_length=200)
+    athlete_id: Optional[str] = None
     team_id: Optional[str] = None
 
 
@@ -229,6 +342,9 @@ class HeatLaneResponse(BaseModel):
     heat_id: str
     lane_number: int
     participant_name: str | None = None
+    athlete_id: str | None = None
+    naipe: str | None = None
+    category: str | None = None
     team_id: str | None = None
     team: str | None = None
     status: str

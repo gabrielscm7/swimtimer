@@ -1,4 +1,6 @@
 import asyncio
+import csv
+import io
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -10,12 +12,14 @@ from fastapi import (
     File,
     HTTPException,
     Query,
+    Response,
     UploadFile,
     WebSocket,
     WebSocketDisconnect,
 )
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from openpyxl import Workbook, load_workbook
 from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -26,8 +30,13 @@ from .classification import (
 )
 from .config import settings
 from .database import AsyncSessionLocal, engine, get_db, init_db
-from .models import Event, Heat, HeatLane, LapEvent, Prova, Team
+from .models import Athlete, Event, Heat, HeatLane, LapEvent, Prova, Team
 from .schemas import (
+    AthleteCreate,
+    AthleteImportResult,
+    AthleteListResponse,
+    AthleteResponse,
+    AthleteUpdate,
     EventCreate,
     EventUpdate,
     HeatCreate,
@@ -37,9 +46,12 @@ from .schemas import (
     ProvaCreate,
     ProvaUpdate,
     TeamCreate,
+    TeamResponse,
     TeamUpdate,
     compute_speed,
     format_race_time,
+    normalize_category,
+    normalize_naipe,
 )
 from .ws_manager import ConnectionManager
 
@@ -78,7 +90,7 @@ async def lifespan(app: FastAPI):
     await engine.dispose()
 
 
-app = FastAPI(title="SwimTimer", version="2.0.0", lifespan=lifespan)
+app = FastAPI(title="SwimTimer", version="2.2.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -128,12 +140,24 @@ async def _team_map(session: AsyncSession, event_id: str) -> dict[str, dict]:
     }
 
 
-def _team_dict(team: Team) -> dict:
+async def _team_athlete_counts(
+    session: AsyncSession, event_id: str
+) -> dict[str, int]:
+    result = await session.execute(
+        select(Athlete.team_id, func.count(Athlete.id))
+        .where(Athlete.event_id == event_id, Athlete.team_id.is_not(None))
+        .group_by(Athlete.team_id)
+    )
+    return {team_id: count for team_id, count in result.all()}
+
+
+def _team_dict(team: Team, athlete_count: int = 0) -> dict:
     return {
         "id": team.id,
         "event_id": team.event_id,
         "name": team.name,
         "logo_url": team.logo_url,
+        "athlete_count": athlete_count,
     }
 
 
@@ -144,6 +168,7 @@ def _lane_dict(
     pool_length_m: int,
     team_name: str | None,
     team_logo_url: str | None = None,
+    athlete: Athlete | None = None,
     laps: int = 0,
     last_lap_at: float | None = None,
 ) -> dict:
@@ -151,7 +176,10 @@ def _lane_dict(
         "id": lane.id,
         "heat_id": lane.heat_id,
         "lane_number": lane.lane_number,
-        "participant_name": lane.participant_name,
+        "participant_name": athlete.name if athlete else lane.participant_name,
+        "athlete_id": lane.athlete_id,
+        "naipe": athlete.naipe if athlete else None,
+        "category": athlete.category if athlete else None,
         "team_id": lane.team_id,
         "team": team_name,
         "team_logo_url": team_logo_url,
@@ -164,6 +192,26 @@ def _lane_dict(
         "meters": laps * pool_length_m,
         "last_lap_at": last_lap_at,
     }
+
+
+async def _lane_payload(
+    session: AsyncSession, lane: HeatLane, heat: Heat
+) -> dict:
+    event = await session.get(Event, heat.event_id)
+    athlete = (
+        await session.get(Athlete, lane.athlete_id)
+        if lane.athlete_id
+        else None
+    )
+    team = await session.get(Team, lane.team_id) if lane.team_id else None
+    return _lane_dict(
+        lane,
+        heat=heat,
+        pool_length_m=event.pool_length_m if event else 0,
+        team_name=team.name if team else None,
+        team_logo_url=team.logo_url if team else None,
+        athlete=athlete,
+    )
 
 
 async def _heats_payload(
@@ -200,6 +248,19 @@ async def _heats_payload(
     for lane in result.scalars().all():
         lanes_by_heat.setdefault(lane.heat_id, []).append(lane)
         lane_ids.append(lane.id)
+
+    athlete_ids = {
+        lane.athlete_id
+        for lanes in lanes_by_heat.values()
+        for lane in lanes
+        if lane.athlete_id
+    }
+    athletes_by_id: dict[str, Athlete] = {}
+    if athlete_ids:
+        result = await session.execute(
+            select(Athlete).where(Athlete.id.in_(athlete_ids))
+        )
+        athletes_by_id = {item.id: item for item in result.scalars().all()}
 
     lap_counts: dict[str, int] = {}
     last_laps: dict[str, float] = {}
@@ -249,6 +310,9 @@ async def _heats_payload(
                             team_map.get(lane.team_id) or {}
                         ).get("logo_url")
                         if lane.team_id
+                        else None,
+                        athlete=athletes_by_id.get(lane.athlete_id)
+                        if lane.athlete_id
                         else None,
                         laps=lap_counts.get(lane.id, 0),
                         last_lap_at=last_laps.get(lane.id),
@@ -450,14 +514,20 @@ async def _event_payload(
         result = await session.execute(
             select(Team).where(Team.event_id == event.id).order_by(Team.name)
         )
+        counts = await _team_athlete_counts(session, event.id)
         payload["teams"] = [
-            _team_dict(team) for team in result.scalars().all()
+            _team_dict(team, counts.get(team.id, 0))
+            for team in result.scalars().all()
         ]
     return payload
 
 
 def _participant_lanes(lanes: list[HeatLane]) -> list[HeatLane]:
-    return [lane for lane in lanes if lane.participant_name or lane.team_id]
+    return [
+        lane
+        for lane in lanes
+        if lane.participant_name or lane.athlete_id or lane.team_id
+    ]
 
 
 async def _heat_lanes(session: AsyncSession, heat_id: str) -> list[HeatLane]:
@@ -566,7 +636,7 @@ async def _maybe_finish_heat(session: AsyncSession, heat: Heat) -> bool:
 # --------------------------------------------------------------------------- #
 @app.get("/api/health")
 async def health() -> dict:
-    return {"status": "ok", "version": "2.0.0"}
+    return {"status": "ok", "version": "2.2.0"}
 
 
 @app.get("/api/status")
@@ -649,6 +719,7 @@ async def delete_event(
     lane_ids = select(HeatLane.id).where(HeatLane.heat_id.in_(heat_ids))
     await session.execute(delete(LapEvent).where(LapEvent.lane_id.in_(lane_ids)))
     await session.execute(delete(HeatLane).where(HeatLane.heat_id.in_(heat_ids)))
+    await session.execute(delete(Athlete).where(Athlete.event_id == event_id))
     await session.execute(delete(Heat).where(Heat.event_id == event_id))
     await session.execute(delete(Prova).where(Prova.event_id == event_id))
     await session.execute(delete(Team).where(Team.event_id == event_id))
@@ -660,7 +731,11 @@ async def delete_event(
 # --------------------------------------------------------------------------- #
 # Equipes
 # --------------------------------------------------------------------------- #
-@app.post("/api/events/{event_id}/teams", status_code=201)
+@app.post(
+    "/api/events/{event_id}/teams",
+    status_code=201,
+    response_model=TeamResponse,
+)
 async def create_team(
     event_id: str,
     payload: TeamCreate,
@@ -674,7 +749,7 @@ async def create_team(
     return _team_dict(team)
 
 
-@app.get("/api/events/{event_id}/teams")
+@app.get("/api/events/{event_id}/teams", response_model=list[TeamResponse])
 async def list_teams(
     event_id: str,
     session: AsyncSession = Depends(get_db),
@@ -683,10 +758,14 @@ async def list_teams(
     result = await session.execute(
         select(Team).where(Team.event_id == event_id).order_by(Team.name)
     )
-    return [_team_dict(team) for team in result.scalars().all()]
+    counts = await _team_athlete_counts(session, event_id)
+    return [
+        _team_dict(team, counts.get(team.id, 0))
+        for team in result.scalars().all()
+    ]
 
 
-@app.patch("/api/teams/{team_id}")
+@app.patch("/api/teams/{team_id}", response_model=TeamResponse)
 async def update_team(
     team_id: str,
     payload: TeamUpdate,
@@ -699,7 +778,12 @@ async def update_team(
         setattr(team, field, value)
     await session.commit()
     await session.refresh(team)
-    return _team_dict(team)
+    count = await session.scalar(
+        select(func.count())
+        .select_from(Athlete)
+        .where(Athlete.team_id == team.id)
+    )
+    return _team_dict(team, int(count or 0))
 
 
 def _sniff_image(data: bytes) -> tuple[str, str] | None:
@@ -804,10 +888,537 @@ async def delete_team(
         .select_from(HeatLane)
         .where(HeatLane.team_id == team_id)
     )
-    if usage:
+    athletes = await session.scalar(
+        select(func.count())
+        .select_from(Athlete)
+        .where(Athlete.team_id == team_id)
+    )
+    if usage or athletes:
         raise HTTPException(status_code=409, detail="equipe_em_uso")
     await session.delete(team)
     await session.commit()
+
+
+# --------------------------------------------------------------------------- #
+# Atletas
+# --------------------------------------------------------------------------- #
+def _athlete_dict(athlete: Athlete, team: Team | None = None) -> dict:
+    return {
+        "id": athlete.id,
+        "event_id": athlete.event_id,
+        "team_id": athlete.team_id,
+        "name": athlete.name,
+        "naipe": athlete.naipe,
+        "category": athlete.category,
+        "created_at": athlete.created_at,
+        "updated_at": athlete.updated_at,
+        "team_name": team.name if team else None,
+        "team_logo_url": team.logo_url if team else None,
+    }
+
+
+async def _get_athlete(session: AsyncSession, athlete_id: str) -> Athlete:
+    athlete = await session.get(Athlete, athlete_id)
+    if athlete is None:
+        raise HTTPException(status_code=404, detail="atleta_nao_encontrado")
+    return athlete
+
+
+async def _validate_athlete_team(
+    session: AsyncSession, event_id: str, team_id: str | None
+) -> Team | None:
+    if team_id is None:
+        return None
+    team = await session.get(Team, team_id)
+    if team is None or team.event_id != event_id:
+        raise HTTPException(status_code=404, detail="equipe_nao_encontrada")
+    return team
+
+
+async def _broadcast_athletes_changed(event_id: str) -> None:
+    await manager.broadcast(
+        {
+            "type": "athletes_changed",
+            "scope": "event",
+            "payload": {"event_id": event_id},
+        }
+    )
+
+
+async def _athlete_duplicate_exists(
+    session: AsyncSession,
+    event_id: str,
+    name: str,
+    team_id: str | None,
+    *,
+    exclude_id: str | None = None,
+) -> bool:
+    query = (
+        select(func.count())
+        .select_from(Athlete)
+        .where(
+            Athlete.event_id == event_id,
+            func.lower(Athlete.name) == name.lower(),
+            func.coalesce(Athlete.team_id, "") == (team_id or ""),
+        )
+    )
+    if exclude_id is not None:
+        query = query.where(Athlete.id != exclude_id)
+    return bool(await session.scalar(query))
+
+
+@app.post(
+    "/api/events/{event_id}/athletes",
+    status_code=201,
+    response_model=AthleteResponse,
+)
+async def create_athlete(
+    event_id: str,
+    payload: AthleteCreate,
+    session: AsyncSession = Depends(get_db),
+) -> dict:
+    await _get_event(session, event_id)
+    team = await _validate_athlete_team(session, event_id, payload.team_id)
+    if await _athlete_duplicate_exists(
+        session, event_id, payload.name, payload.team_id
+    ):
+        raise HTTPException(status_code=409, detail="atleta_duplicado")
+
+    athlete = Athlete(
+        event_id=event_id,
+        team_id=payload.team_id,
+        name=payload.name,
+        naipe=payload.naipe,
+        category=payload.category,
+        created_at=time.time(),
+    )
+    session.add(athlete)
+    try:
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        raise HTTPException(status_code=409, detail="atleta_duplicado")
+    await session.refresh(athlete)
+    await _broadcast_athletes_changed(event_id)
+    return _athlete_dict(athlete, team)
+
+
+@app.get(
+    "/api/events/{event_id}/athletes",
+    response_model=AthleteListResponse,
+)
+async def list_athletes(
+    event_id: str,
+    q: str | None = Query(default=None, max_length=120),
+    team_id: str | None = Query(default=None),
+    naipe: str | None = Query(default=None),
+    category: str | None = Query(default=None, max_length=60),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    session: AsyncSession = Depends(get_db),
+) -> dict:
+    await _get_event(session, event_id)
+    conditions = [Athlete.event_id == event_id]
+
+    if q and q.strip():
+        conditions.append(Athlete.name.ilike(f"%{q.strip()}%"))
+    if team_id:
+        conditions.append(Athlete.team_id == team_id)
+    if naipe:
+        normalized = normalize_naipe(naipe)
+        if normalized not in ("M", "F"):
+            raise HTTPException(status_code=400, detail="naipe_invalido")
+        conditions.append(Athlete.naipe == normalized)
+    if category:
+        conditions.append(
+            Athlete.category == normalize_category(category)
+        )
+
+    total = await session.scalar(
+        select(func.count()).select_from(Athlete).where(*conditions)
+    )
+    result = await session.execute(
+        select(Athlete)
+        .where(*conditions)
+        .order_by(Athlete.name, Athlete.id)
+        .limit(limit)
+        .offset(offset)
+    )
+    athletes = list(result.scalars().all())
+
+    team_ids = {athlete.team_id for athlete in athletes if athlete.team_id}
+    teams: dict[str, Team] = {}
+    if team_ids:
+        result = await session.execute(
+            select(Team).where(Team.id.in_(team_ids))
+        )
+        teams = {team.id: team for team in result.scalars().all()}
+
+    return {
+        "items": [
+            _athlete_dict(athlete, teams.get(athlete.team_id))
+            for athlete in athletes
+        ],
+        "total": int(total or 0),
+        "limit": limit,
+        "offset": offset,
+    }
+
+
+@app.get("/api/athletes/{athlete_id}", response_model=AthleteResponse)
+async def get_athlete(
+    athlete_id: str,
+    session: AsyncSession = Depends(get_db),
+) -> dict:
+    athlete = await _get_athlete(session, athlete_id)
+    team = await session.get(Team, athlete.team_id) if athlete.team_id else None
+    return _athlete_dict(athlete, team)
+
+
+@app.patch("/api/athletes/{athlete_id}", response_model=AthleteResponse)
+async def update_athlete(
+    athlete_id: str,
+    payload: AthleteUpdate,
+    session: AsyncSession = Depends(get_db),
+) -> dict:
+    athlete = await _get_athlete(session, athlete_id)
+    data = payload.model_dump(exclude_unset=True)
+    if "name" in data and not data["name"]:
+        raise HTTPException(status_code=422, detail="nome_obrigatorio")
+
+    if "team_id" in data:
+        await _validate_athlete_team(
+            session, athlete.event_id, data["team_id"]
+        )
+
+    new_name = data.get("name", athlete.name)
+    new_team_id = data["team_id"] if "team_id" in data else athlete.team_id
+    if "name" in data or "team_id" in data:
+        if await _athlete_duplicate_exists(
+            session,
+            athlete.event_id,
+            new_name,
+            new_team_id,
+            exclude_id=athlete.id,
+        ):
+            raise HTTPException(status_code=409, detail="atleta_duplicado")
+
+    for field, value in data.items():
+        setattr(athlete, field, value)
+    athlete.updated_at = time.time()
+
+    # Mantem a copia desnormalizada das raias em sincronia para os clientes
+    # (fiscal/supervisor/publico) que leem participant_name diretamente.
+    await session.execute(
+        update(HeatLane)
+        .where(HeatLane.athlete_id == athlete.id)
+        .values(participant_name=athlete.name, team_id=athlete.team_id)
+    )
+    await session.commit()
+    await session.refresh(athlete)
+    team = await session.get(Team, athlete.team_id) if athlete.team_id else None
+    await _broadcast_athletes_changed(athlete.event_id)
+    return _athlete_dict(athlete, team)
+
+
+@app.delete("/api/athletes/{athlete_id}", status_code=204)
+async def delete_athlete(
+    athlete_id: str,
+    session: AsyncSession = Depends(get_db),
+) -> None:
+    athlete = await _get_athlete(session, athlete_id)
+    usage = await session.scalar(
+        select(func.count())
+        .select_from(HeatLane)
+        .where(HeatLane.athlete_id == athlete.id)
+    )
+    if usage:
+        raise HTTPException(status_code=409, detail="atleta_em_uso")
+    event_id = athlete.event_id
+    await session.delete(athlete)
+    await session.commit()
+    await _broadcast_athletes_changed(event_id)
+
+
+# ---------------- Importacao / exportacao de planilhas ---------------- #
+_IMPORT_COLUMNS = ("NOME", "EQUIPE", "NAIPE", "CATEGORIA")
+
+
+def _strip_accents(value: str) -> str:
+    import unicodedata
+
+    decomposed = unicodedata.normalize("NFKD", value)
+    return "".join(
+        char for char in decomposed if not unicodedata.combining(char)
+    )
+
+
+def _normalize_header(value: object) -> str:
+    if value is None:
+        return ""
+    return _strip_accents(str(value)).strip().upper()
+
+
+def _parse_csv_rows(data: bytes) -> list[list[object]]:
+    try:
+        text = data.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        text = data.decode("latin-1")
+    try:
+        dialect = csv.Sniffer().sniff(text[:4096], delimiters=",;\t")
+    except csv.Error:
+        dialect = csv.excel
+    reader = csv.reader(io.StringIO(text), dialect)
+    return [row for row in reader]
+
+
+def _parse_xlsx_rows(data: bytes) -> list[list[object]]:
+    workbook = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
+    try:
+        sheet = workbook.active
+        if sheet is None:
+            return []
+        return [list(row) for row in sheet.iter_rows(values_only=True)]
+    finally:
+        workbook.close()
+
+
+def _detect_header(rows: list[list[object]]) -> tuple[int, dict[str, int]]:
+    for index, row in enumerate(rows[:20]):
+        headers = [_normalize_header(cell) for cell in row]
+        if "NOME" in headers:
+            return index, {
+                header: position
+                for position, header in enumerate(headers)
+                if header
+            }
+    raise HTTPException(status_code=400, detail="planilha_sem_cabecalho")
+
+
+def _cell(row: list[object], position: int | None) -> str:
+    if position is None or position >= len(row) or row[position] is None:
+        return ""
+    return str(row[position]).strip()
+
+
+@app.post(
+    "/api/events/{event_id}/athletes/import",
+    response_model=AthleteImportResult,
+)
+async def import_athletes(
+    event_id: str,
+    file: UploadFile = File(...),
+    session: AsyncSession = Depends(get_db),
+) -> dict:
+    await _get_event(session, event_id)
+
+    filename = (file.filename or "").lower()
+    if filename.endswith(".xlsx"):
+        fmt = "xlsx"
+    elif filename.endswith(".csv") or filename.endswith(".txt"):
+        fmt = "csv"
+    else:
+        raise HTTPException(status_code=415, detail="formato_invalido")
+
+    data = await file.read(settings.MAX_IMPORT_BYTES + 1)
+    if len(data) > settings.MAX_IMPORT_BYTES:
+        raise HTTPException(status_code=413, detail="arquivo_muito_grande")
+    if not data:
+        raise HTTPException(status_code=400, detail="arquivo_vazio")
+    if fmt == "xlsx" and not data.startswith(b"PK\x03\x04"):
+        raise HTTPException(status_code=415, detail="formato_invalido")
+
+    if fmt == "xlsx":
+        try:
+            rows = _parse_xlsx_rows(data)
+        except Exception:
+            raise HTTPException(
+                status_code=400, detail="planilha_invalida"
+            )
+    else:
+        rows = _parse_csv_rows(data)
+
+    header_index, header_map = _detect_header(rows)
+    missing = [
+        column for column in _IMPORT_COLUMNS if column not in header_map
+    ]
+    if missing:
+        raise HTTPException(
+            status_code=400,
+            detail=f"colunas_obrigatorias:{','.join(missing)}",
+        )
+
+    data_rows = len(rows) - header_index - 1
+    if data_rows > settings.MAX_IMPORT_ROWS:
+        raise HTTPException(status_code=413, detail="planilha_muito_grande")
+
+    result = await session.execute(
+        select(Team).where(Team.event_id == event_id)
+    )
+    teams_by_key = {
+        team.name.casefold(): team for team in result.scalars().all()
+    }
+    result = await session.execute(
+        select(Athlete.name, Athlete.team_id).where(
+            Athlete.event_id == event_id
+        )
+    )
+    existing_keys = {
+        (name.casefold(), team_id or "") for name, team_id in result.all()
+    }
+
+    errors: list[dict] = []
+    pending: list[Athlete] = []
+    created_teams = 0
+    skipped = 0
+    now = time.time()
+
+    name_col = header_map["NOME"]
+    team_col = header_map["EQUIPE"]
+    naipe_col = header_map["NAIPE"]
+    category_col = header_map["CATEGORIA"]
+
+    for index, row in enumerate(rows):
+        if index <= header_index:
+            continue
+        line = index + 1
+
+        name = _cell(row, name_col)
+        team_name = _cell(row, team_col)
+        naipe_raw = _cell(row, naipe_col)
+        category_raw = _cell(row, category_col)
+
+        if not name and not team_name and not naipe_raw and not category_raw:
+            skipped += 1
+            continue
+        if not name:
+            errors.append(
+                {"line": line, "field": "nome", "message": "nome_obrigatorio"}
+            )
+            continue
+        naipe = normalize_naipe(naipe_raw)
+        if naipe not in ("M", "F"):
+            errors.append(
+                {"line": line, "field": "naipe", "message": "naipe_invalido"}
+            )
+            continue
+
+        team_id: str | None = None
+        if team_name:
+            key = team_name.casefold()
+            team = teams_by_key.get(key)
+            if team is None:
+                team = Team(event_id=event_id, name=team_name)
+                session.add(team)
+                await session.flush()
+                teams_by_key[key] = team
+                created_teams += 1
+            team_id = team.id
+
+        duplicate_key = (name.casefold(), team_id or "")
+        if duplicate_key in existing_keys:
+            errors.append(
+                {"line": line, "field": "nome", "message": "atleta_duplicado"}
+            )
+            continue
+        existing_keys.add(duplicate_key)
+
+        pending.append(
+            Athlete(
+                event_id=event_id,
+                team_id=team_id,
+                name=name,
+                naipe=naipe,
+                category=normalize_category(category_raw),
+                created_at=now,
+            )
+        )
+
+    session.add_all(pending)
+    try:
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        raise HTTPException(status_code=409, detail="importacao_conflito")
+
+    await _broadcast_athletes_changed(event_id)
+    return {
+        "created_athletes": len(pending),
+        "created_teams": created_teams,
+        "skipped": skipped,
+        "errors": errors,
+    }
+
+
+def _attachment_response(
+    content: bytes, filename: str, media_type: str
+) -> Response:
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"'
+        },
+    )
+
+
+@app.get("/api/events/{event_id}/athletes/import-template")
+async def download_athletes_template(
+    event_id: str,
+    format: str = Query(default="csv", pattern="^(csv|xlsx)$"),
+    session: AsyncSession = Depends(get_db),
+) -> Response:
+    await _get_event(session, event_id)
+    if format == "xlsx":
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.append(list(_IMPORT_COLUMNS))
+        sheet.append(["Maria Silva", "Equipe A", "F", "SUB-12"])
+        buffer = io.BytesIO()
+        workbook.save(buffer)
+        return _attachment_response(
+            buffer.getvalue(),
+            "modelo_atletas.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+
+    return _attachment_response(
+        ("\ufeff" + ",".join(_IMPORT_COLUMNS) + "\n"
+         "Maria Silva,Equipe A,F,SUB-12\n").encode("utf-8"),
+        "modelo_atletas.csv",
+        "text/csv; charset=utf-8",
+    )
+
+
+@app.get("/api/events/{event_id}/athletes/export")
+async def export_athletes(
+    event_id: str,
+    session: AsyncSession = Depends(get_db),
+) -> Response:
+    await _get_event(session, event_id)
+    result = await session.execute(
+        select(Athlete, Team.name)
+        .outerjoin(Team, Athlete.team_id == Team.id)
+        .where(Athlete.event_id == event_id)
+        .order_by(Athlete.name)
+    )
+    buffer = io.StringIO()
+    writer = csv.writer(buffer, lineterminator="\n")
+    writer.writerow(_IMPORT_COLUMNS)
+    for athlete, team_name in result.all():
+        writer.writerow(
+            [
+                athlete.name,
+                team_name or "",
+                athlete.naipe,
+                athlete.category or "",
+            ]
+        )
+    return _attachment_response(
+        ("\ufeff" + buffer.getvalue()).encode("utf-8"),
+        "atletas.csv",
+        "text/csv; charset=utf-8",
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -1061,58 +1672,6 @@ async def list_heats_in_prova(
 # --------------------------------------------------------------------------- #
 # Baterias (heats)
 # --------------------------------------------------------------------------- #
-@app.post("/api/events/{event_id}/heats", status_code=201)
-async def create_heat(
-    event_id: str,
-    payload: HeatCreate,
-    session: AsyncSession = Depends(get_db),
-) -> dict:
-    """Compatibilidade: cria prova e bateria 1:1 (fluxo legado).
-
-    Use `POST /api/provas/{prova_id}/heats` para varias baterias na mesma prova.
-    """
-    if payload.heat_type == "bateria" and payload.distance_m is None:
-        raise HTTPException(status_code=400, detail="distance_m_obrigatorio")
-    if payload.heat_type == "maratona" and payload.duration_s is None:
-        raise HTTPException(status_code=400, detail="duration_s_obrigatorio")
-
-    async with _heat_guard(f"event:{event_id}"):
-        session.expire_all()
-        await _get_event(session, event_id)
-        prova_payload = ProvaCreate(
-            name=payload.name,
-            order_num=payload.order_num,
-            distance_m=payload.distance_m,
-        )
-        prova = await _create_prova_record(
-            session, event_id, prova_payload
-        )
-        await session.flush()
-        heat = Heat(
-            event_id=event_id,
-            prova_id=prova.id,
-            name=payload.name,
-            order_num=1,
-            heat_type=payload.heat_type,
-            distance_m=payload.distance_m,
-            duration_s=payload.duration_s,
-            status="scheduled",
-        )
-        session.add(heat)
-        try:
-            await session.commit()
-        except IntegrityError:
-            await session.rollback()
-            raise HTTPException(status_code=400, detail="order_num_duplicado")
-        await session.refresh(heat)
-
-    await _broadcast_server_status()
-    await manager.broadcast(
-        _prova_state_message(await _prova_payload(session, prova))
-    )
-    return await _heat_payload(session, heat)
-
-
 @app.get("/api/events/{event_id}/heats")
 async def list_heats(
     event_id: str,
@@ -1295,7 +1854,6 @@ async def abort_heat(
 
 
 @app.post("/api/heats/{heat_id}/finish")
-@app.post("/api/heats/{heat_id}/finish-marathon")
 async def finish_heat(
     heat_id: str,
     session: AsyncSession = Depends(get_db),
@@ -1340,25 +1898,39 @@ async def configure_lanes(
             lane.lane_number: lane for lane in await _heat_lanes(session, heat.id)
         }
         for item in payload.lanes:
-            if item.team_id is not None:
-                team = await session.get(Team, item.team_id)
-                if team is None or team.event_id != heat.event_id:
+            athlete = None
+            if item.athlete_id is not None:
+                athlete = await session.get(Athlete, item.athlete_id)
+                if athlete is None or athlete.event_id != heat.event_id:
                     raise HTTPException(
-                        status_code=404, detail="equipe_nao_encontrada"
+                        status_code=404, detail="atleta_nao_encontrado"
                     )
+            else:
+                if item.team_id is not None:
+                    team = await session.get(Team, item.team_id)
+                    if team is None or team.event_id != heat.event_id:
+                        raise HTTPException(
+                            status_code=404, detail="equipe_nao_encontrada"
+                        )
+            participant_name = (
+                athlete.name if athlete else item.participant_name
+            )
+            team_id = athlete.team_id if athlete else item.team_id
             lane = existing.get(item.lane_number)
             if lane is None:
                 lane = HeatLane(
                     heat_id=heat.id,
                     lane_number=item.lane_number,
-                    participant_name=item.participant_name,
-                    team_id=item.team_id,
+                    participant_name=participant_name,
+                    athlete_id=item.athlete_id,
+                    team_id=team_id,
                     status="assigned",
                 )
                 session.add(lane)
             else:
-                lane.participant_name = item.participant_name
-                lane.team_id = item.team_id
+                lane.participant_name = participant_name
+                lane.athlete_id = item.athlete_id
+                lane.team_id = team_id
                 lane.status = "assigned"
         await session.commit()
         await session.refresh(heat)
@@ -1381,6 +1953,14 @@ async def update_lane(
         if heat.status not in ("scheduled", "ready_check"):
             raise HTTPException(status_code=409, detail="prova_ja_iniciada")
         data = payload.model_dump(exclude_unset=True)
+        if data.get("athlete_id") is not None:
+            athlete = await session.get(Athlete, data["athlete_id"])
+            if athlete is None or athlete.event_id != heat.event_id:
+                raise HTTPException(
+                    status_code=404, detail="atleta_nao_encontrado"
+                )
+            data["participant_name"] = athlete.name
+            data["team_id"] = athlete.team_id
         if data.get("team_id") is not None:
             team = await session.get(Team, data["team_id"])
             if team is None or team.event_id != heat.event_id:
@@ -1391,17 +1971,9 @@ async def update_lane(
             lane.status = "assigned"
         await session.commit()
         await session.refresh(lane)
-        event = await session.get(Event, heat.event_id)
-        team = await session.get(Team, lane.team_id) if lane.team_id else None
         await _broadcast_heat(session, heat)
         await _broadcast_ready(session, heat)
-        return _lane_dict(
-            lane,
-            heat=heat,
-            pool_length_m=event.pool_length_m if event else 0,
-            team_name=team.name if team else None,
-            team_logo_url=team.logo_url if team else None,
-        )
+        return await _lane_payload(session, lane, heat)
 
 
 @app.post("/api/lanes/{lane_id}/ready")
@@ -1421,17 +1993,9 @@ async def lane_ready(
         lane.status = "ready"
         await session.commit()
         await session.refresh(lane)
-        event = await session.get(Event, heat.event_id)
-        team = await session.get(Team, lane.team_id) if lane.team_id else None
         await _broadcast_heat(session, heat)
         await _broadcast_ready(session, heat)
-        return _lane_dict(
-            lane,
-            heat=heat,
-            pool_length_m=event.pool_length_m if event else 0,
-            team_name=team.name if team else None,
-            team_logo_url=team.logo_url if team else None,
-        )
+        return await _lane_payload(session, lane, heat)
 
 
 class LaneActionError(Exception):
@@ -1577,18 +2141,10 @@ async def lane_dq(
         all_finished = await _maybe_finish_heat(session, heat)
         await session.commit()
         await session.refresh(lane)
-        event = await session.get(Event, heat.event_id)
-        team = await session.get(Team, lane.team_id) if lane.team_id else None
         await _broadcast_heat(session, heat)
         if all_finished:
             await _broadcast_server_status()
-        return _lane_dict(
-            lane,
-            heat=heat,
-            pool_length_m=event.pool_length_m if event else 0,
-            team_name=team.name if team else None,
-            team_logo_url=team.logo_url if team else None,
-        )
+        return await _lane_payload(session, lane, heat)
 
 
 @app.delete("/api/lanes/{lane_id}/lap/last")

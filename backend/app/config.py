@@ -26,12 +26,13 @@ class Settings(BaseSettings):
     )
 
     DATABASE_URL: str = "sqlite+aiosqlite:///./data/swimtimer.db"
-    RESET_PASSWORD: str = "maratona2025"
     HOST: str = "0.0.0.0"
     PORT: int = 8080
     FRONTEND_DIR: str = ""
     LOGO_DIR: str = ""
     MAX_LOGO_BYTES: int = 1_048_576
+    MAX_IMPORT_BYTES: int = 2_097_152
+    MAX_IMPORT_ROWS: int = 1000
 
     @property
     def frontend_dir(self) -> Path:

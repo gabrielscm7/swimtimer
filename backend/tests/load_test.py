@@ -20,6 +20,7 @@ N_PROVAS = int(os.environ.get("LOAD_PROVAS", "5"))
 HEATS_PER_PROVA = int(os.environ.get("LOAD_HEATS", "4"))
 LANES = int(os.environ.get("LOAD_LANES", "8"))
 TEAMS = int(os.environ.get("LOAD_TEAMS", "20"))
+ATHLETES = int(os.environ.get("LOAD_ATHLETES", "200"))
 
 
 async def _time(coro):
@@ -56,7 +57,7 @@ async def main() -> None:
     log(
         f"- Massa: {N_PROVAS} provas x {HEATS_PER_PROVA} baterias x "
         f"{LANES} raias = {N_PROVAS * HEATS_PER_PROVA * LANES} raias; "
-        f"{TEAMS} equipes"
+        f"{TEAMS} equipes; {ATHLETES} atletas importados"
     )
     log()
 
@@ -76,6 +77,50 @@ async def main() -> None:
                     json={"name": f"Equipe {index + 1}"},
                 )
                 teams.append(response.json())
+
+            rows = ["NOME,EQUIPE,NAIPE,CATEGORIA"]
+            for index in range(ATHLETES):
+                rows.append(
+                    f"Atleta {index:03d},Equipe {index % TEAMS + 1},"
+                    f"{'M' if index % 2 == 0 else 'F'},SUB-12"
+                )
+            csv_content = ("\n".join(rows) + "\n").encode("utf-8")
+
+            import_start = time.perf_counter()
+            import_response = await client.post(
+                f"/api/events/{event['id']}/athletes/import",
+                files={"file": ("atletas.csv", csv_content, "text/csv")},
+            )
+            import_ms = (time.perf_counter() - import_start) * 1000
+            import_body = import_response.json()
+            log("## Importacao de atletas")
+            log(
+                f"- {import_body['created_athletes']} atletas e "
+                f"{import_body['created_teams']} equipes em {import_ms:.0f} ms "
+                f"({import_ms / max(1, ATHLETES):.2f} ms/atleta), "
+                f"{len(import_body['errors'])} erros"
+            )
+
+            read_durations = []
+            for offset in range(0, ATHLETES, 50):
+                elapsed, response = await _time(
+                    client.get(
+                        f"/api/events/{event['id']}/athletes",
+                        params={"limit": 50, "offset": offset},
+                    )
+                )
+                assert response.status_code == 200, response.text
+                read_durations.append(elapsed)
+            filtered = await client.get(
+                f"/api/events/{event['id']}/athletes",
+                params={"naipe": "F", "category": "SUB-12", "limit": 50},
+            )
+            log(
+                f"- listagem paginada: mediana {statistics.median(read_durations):.1f} ms, "
+                f"max {max(read_durations):.1f} ms; total filtrado "
+                f"{filtered.json()['total']}"
+            )
+            log()
 
             setup_start = time.perf_counter()
             provas = []

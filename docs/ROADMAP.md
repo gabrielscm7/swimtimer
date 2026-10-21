@@ -78,6 +78,24 @@
 
 ---
 
+## Versão 2.2 — Gestão de equipes e atletas (concluída)
+
+**Objetivo:** cadastro prévio de toda a equipe, inclusive por planilha, com
+isolamento de dados por evento e operação estável com 200+ atletas.
+
+- [x] Entidade `Athlete` por evento (nome, equipe, naipe, categoria)
+- [x] Migração 0005 com FK opcional em `heat_lane.athlete_id` (compatível com legado)
+- [x] CRUD e listagem paginada/filtrada de atletas
+- [x] Importação de planilhas CSV e XLSX com relatório parcial de erros
+- [x] Criação automática de equipes e download de modelo CSV/XLSX
+- [x] Exportação CSV da lista de atletas
+- [x] Aba Atletas na gestão (busca, filtros, paginação, importação, relatório)
+- [x] Autocomplete de atletas nas raias com preenchimento automático da equipe
+- [x] Contagem agregada de atletas por equipe no backend
+- [x] Testes de atletas, importação, migração, carga (200 atletas) e frontend
+- [x] Remoção de `admin.html`, `dashboard.html`, rota legada de bateria e
+  `finish-marathon` duplicado
+
 ## Versão 2.1 — Provas e classificação consolidada (concluída)
 
 - [x] Entidade `Prova` (evento → prova → bateria)
@@ -96,7 +114,7 @@
 - [x] Cadastro de equipes e baterias
 - [x] Gestão de baterias
 - [ ] Upload de balizamento (CSV)
-- [ ] Cadastro individual de atletas
+- [x] Cadastro individual de atletas
 - [ ] Parciais e viradas para provas longas
 - [ ] Tela de programa (próximas baterias)
 

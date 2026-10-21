@@ -1072,3 +1072,62 @@ button.error {
   border-bottom: 1px solid var(--border);
   margin-bottom: 8px;
 }
+
+/* ------------------------------------------------------------------ */
+/* Atletas                                                            */
+/* ------------------------------------------------------------------ */
+.section-head .actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.filters-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.filters-row input,
+.filters-row select {
+  flex: 1 1 160px;
+  min-width: 140px;
+}
+
+.pagination-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+
+.row-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.row-actions button {
+  padding: 4px 8px;
+}
+
+.import-drop {
+  border: 1px dashed var(--border);
+  border-radius: 12px;
+  padding: 18px;
+  text-align: center;
+  margin: 8px 0 12px;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.import-drop p {
+  margin: 0 0 6px;
+}
+
+.import-drop.over {
+  border-color: var(--cyan);
+  background: var(--row-bg);
+}

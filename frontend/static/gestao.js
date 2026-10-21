@@ -18,6 +18,7 @@ const els = {
   overview: document.getElementById("section-overview"),
   heats: document.getElementById("section-heats"),
   teams: document.getElementById("section-teams"),
+  athletes: document.getElementById("section-athletes"),
   settings: document.getElementById("section-settings"),
 };
 
@@ -33,6 +34,21 @@ let dragProvaId = null;
 let dragHeat = null;
 const classificationByProva = {};
 let classificationTimer = null;
+let allAthletes = [];
+const athletesState = {
+  items: [],
+  total: 0,
+  limit: 50,
+  offset: 0,
+  q: "",
+  teamId: "",
+  naipe: "",
+  category: "",
+};
+let athleteForm = null;
+let athleteImport = null;
+let athleteSearchTimer = null;
+let athleteRefreshTimer = null;
 
 function provasSorted() {
   return [...(eventData.provas || [])].sort(
@@ -60,10 +76,12 @@ function heatDistanceText(heat) {
 }
 
 function participantsOfHeat(heat) {
-  return heat.heat_lanes.filter((lane) => lane.participant_name);
+  return heat.heat_lanes.filter(
+    (lane) => lane.participant_name || lane.athlete_id
+  );
 }
 
-function teamParticipantCount(teamId) {
+function teamLaneCount(teamId) {
   return eventData.heats.reduce(
     (sum, heat) =>
       sum + heat.heat_lanes.filter((lane) => lane.team_id === teamId).length,
@@ -104,7 +122,41 @@ function setFieldError(id, message) {
 
 async function loadEvent() {
   eventData = await api("GET", `/api/events/${eventId}`);
+  await loadAthleteData();
   renderAll();
+}
+
+async function fetchAllAthletes() {
+  const pageSize = 200;
+  const all = [];
+  let offset = 0;
+  for (;;) {
+    const data = await api(
+      "GET",
+      `/api/events/${eventId}/athletes?limit=${pageSize}&offset=${offset}`
+    );
+    all.push(...data.items);
+    offset += pageSize;
+    if (offset >= data.total) break;
+  }
+  return all;
+}
+
+async function loadAthletePage() {
+  const query = GestaoLogic.buildAthleteQuery(athletesState);
+  const data = await api(
+    "GET",
+    `/api/events/${eventId}/athletes?${query}`
+  );
+  athletesState.items = data.items;
+  athletesState.total = data.total;
+  athletesState.limit = data.limit;
+  athletesState.offset = data.offset;
+}
+
+async function loadAthleteData() {
+  allAthletes = await fetchAllAthletes();
+  await loadAthletePage();
 }
 
 async function refresh() {
@@ -133,6 +185,7 @@ function renderAll() {
   renderOverview();
   renderHeats();
   renderTeams();
+  renderAthletes();
   renderSettings();
 }
 
@@ -154,6 +207,7 @@ function renderOverview() {
   const heats = eventData.heats;
   const finished = heats.filter((heat) => heat.status === "finished").length;
   const teams = eventData.teams.length;
+  const athletes = allAthletes.length;
   const participants = heats.reduce(
     (sum, heat) => sum + participantsOfHeat(heat).length,
     0
@@ -191,7 +245,8 @@ function renderOverview() {
       <div class="summary-card"><div class="value">${heats.length}</div><div class="label">Baterias</div></div>
       <div class="summary-card"><div class="value">${finished}</div><div class="label">Finalizadas</div></div>
       <div class="summary-card"><div class="value">${teams}</div><div class="label">Equipes</div></div>
-      <div class="summary-card"><div class="value">${participants}</div><div class="label">Participantes</div></div>
+      <div class="summary-card"><div class="value">${athletes}</div><div class="label">Atletas inscritos</div></div>
+      <div class="summary-card"><div class="value">${participants}</div><div class="label">Em raias</div></div>
     </div>
     <div class="panel">
       <h2>Provas</h2>
@@ -242,18 +297,26 @@ function laneGridHTML(heat) {
   let cells = "";
   for (let number = 1; number <= maxLane; number += 1) {
     const lane = heat.heat_lanes.find((item) => item.lane_number === number);
-    const empty = !lane || (!lane.participant_name && !lane.team_id);
+    const empty =
+      !lane || (!lane.participant_name && !lane.athlete_id && !lane.team_id);
     cells += `
       <div class="lane-cell ${empty ? "empty" : ""}">
         <div class="lane-title">RAIA ${number}</div>
         <label>Participante</label>
-        <input type="text" data-lane-input="${number}" placeholder="Nome"
+        <input type="text" data-lane-input="${number}" list="athlete-datalist"
+          data-athlete-id="${escapeHtml(lane && lane.athlete_id ? lane.athlete_id : "")}"
+          placeholder="Nome ou atleta cadastrado"
           value="${escapeHtml(lane ? lane.participant_name || "" : "")}"
           ${editable ? "" : "disabled"} />
         <label style="margin-top: 8px">Equipe</label>
         <select data-lane-team="${number}" ${editable ? "" : "disabled"}>
           ${teamOptions(lane ? lane.team_id : null)}
         </select>
+        ${
+          lane && lane.athlete_id
+            ? '<p class="muted lane-athlete-hint" style="margin:4px 0 0">Atleta cadastrado</p>'
+            : ""
+        }
         ${
           editable
             ? `<div class="lane-actions"><button data-action="save-lane" data-heat="${heat.id}" data-lane="${number}">Salvar raia</button></div>`
@@ -555,11 +618,23 @@ function provaCardHTML(prova) {
 function renderHeats() {
   if (!eventData) return;
   const provas = provasSorted();
+  const datalist = `<datalist id="athlete-datalist">${allAthletes
+    .map(
+      (athlete) =>
+        `<option value="${escapeHtml(GestaoLogic.athleteOptionLabel(athlete))}">${escapeHtml(
+          [GestaoLogic.naipeLabel(athlete.naipe), athlete.category]
+            .filter(Boolean)
+            .join(" · ")
+        )}</option>`
+    )
+    .join("")}</datalist>`;
   els.heats.innerHTML = `
+    ${datalist}
     <div class="section-head">
       <h2>Provas e baterias</h2>
       <button class="primary" data-action="new-prova">+ Nova Prova</button>
     </div>
+    <p class="muted">Nas raias, digite para buscar um atleta cadastrado ou informe um nome manual.</p>
     ${provaForm && provaForm.mode === "create" ? provaFormHTML() : ""}
     ${
       provas.length
@@ -569,6 +644,25 @@ function renderHeats() {
   `;
   wireHeatForm();
   wireDragAndDrop();
+  wireAthleteDatalist();
+}
+
+function wireAthleteDatalist() {
+  const index = GestaoLogic.athleteLabelIndex(allAthletes);
+  els.heats.querySelectorAll("[data-lane-input]").forEach((input) => {
+    input.addEventListener("input", () => {
+      const athlete = index.get(input.value.trim());
+      const teamSelect = input
+        .closest(".lane-cell")
+        .querySelector("[data-lane-team]");
+      if (athlete) {
+        input.dataset.athleteId = athlete.id;
+        if (teamSelect) teamSelect.value = athlete.team_id || "";
+      } else {
+        delete input.dataset.athleteId;
+      }
+    });
+  });
 }
 
 function wireDragAndDrop() {
@@ -786,11 +880,16 @@ function saveLaneInputs(heatId, numbers) {
   return numbers.map((number) => {
     const participant = accordion.querySelector(`[data-lane-input="${number}"]`);
     const team = accordion.querySelector(`[data-lane-team="${number}"]`);
+    const athleteId = participant ? participant.dataset.athleteId || null : null;
     return {
       lane_number: number,
-      participant_name:
-        participant && participant.value.trim() ? participant.value.trim() : null,
-      team_id: team && team.value ? team.value : null,
+      athlete_id: athleteId,
+      participant_name: athleteId
+        ? null
+        : participant && participant.value.trim()
+          ? participant.value.trim()
+          : null,
+      team_id: athleteId ? null : team && team.value ? team.value : null,
     };
   });
 }
@@ -878,12 +977,16 @@ function renderTeams() {
   } else {
     html += '<div class="list">';
     for (const team of eventData.teams) {
-      const count = teamParticipantCount(team.id);
+      const registered = team.athlete_count || 0;
+      const inLanes = teamLaneCount(team.id);
+      const blockDelete = registered + inLanes > 0;
       html += `
         <div class="list-item team-item">
           ${teamLogoHTML(team.logo_url, team.name, "medium")}
           <input type="text" data-team-name="${team.id}" value="${escapeHtml(team.name)}" style="max-width: 280px" />
-          <span class="muted">${pluralize(count, "participante")}</span>
+          <span class="muted">${pluralize(registered, "atleta")}${
+            inLanes ? ` · ${pluralize(inLanes, "em raia", "em raias")}` : ""
+          }</span>
           <label class="file-btn" title="Enviar/substituir logo (PNG, JPEG, WebP até 1 MB)">
             🖼 Logo
             <input type="file" accept="image/png,image/jpeg,image/webp" data-logo-input="${team.id}" hidden />
@@ -894,7 +997,7 @@ function renderTeams() {
               : ""
           }
           <button class="danger" data-action="delete-team" data-id="${team.id}"
-            ${count === 0 ? "" : 'disabled title="Equipe com participantes inscritos"'}>🗑</button>
+            ${blockDelete ? 'disabled title="Equipe com atletas ou raias vinculadas"' : ""}>🗑</button>
         </div>`;
     }
     html += "</div>";
@@ -1007,6 +1110,385 @@ async function deleteTeam(teamId) {
   }
 }
 
+function athleteFormHTML() {
+  const editing = athleteForm.mode === "edit";
+  const athlete = editing
+    ? allAthletes.find((item) => item.id === athleteForm.id)
+    : null;
+  const naipe = athlete ? athlete.naipe : "F";
+  return `
+    <div class="form-card" id="athlete-form">
+      <h2>${editing ? "Editar atleta" : "Novo atleta"}</h2>
+      <div class="grid">
+        <div>
+          <label>Nome</label>
+          <input id="af-name" type="text" maxlength="120" placeholder="Nome completo"
+            value="${escapeHtml(athlete ? athlete.name : "")}" />
+        </div>
+        <div>
+          <label>Equipe</label>
+          <select id="af-team">${teamOptions(athlete ? athlete.team_id : null)}</select>
+        </div>
+        <div>
+          <label>Naipe</label>
+          <select id="af-naipe">
+            <option value="F" ${naipe === "F" ? "selected" : ""}>Feminino</option>
+            <option value="M" ${naipe === "M" ? "selected" : ""}>Masculino</option>
+          </select>
+        </div>
+        <div>
+          <label>Categoria</label>
+          <input id="af-category" type="text" maxlength="60" placeholder="Ex: SUB-12"
+            value="${escapeHtml(athlete ? athlete.category || "" : "")}" />
+        </div>
+      </div>
+      <div class="actions">
+        <button class="primary" data-action="confirm-athlete">${editing ? "Salvar" : "Cadastrar"}</button>
+        <button data-action="cancel-athlete">Cancelar</button>
+      </div>
+      <div class="field-error" id="athlete-error" hidden></div>
+    </div>`;
+}
+
+function athleteImportHTML() {
+  if (!athleteImport) return "";
+  let body = "";
+  if (athleteImport.busy) {
+    body = `<p class="muted">Importando ${escapeHtml(athleteImport.fileName)}...</p>`;
+  } else if (athleteImport.error) {
+    body = `<div class="field-error">${escapeHtml(athleteImport.error)}</div>`;
+  } else if (athleteImport.result) {
+    const result = athleteImport.result;
+    body = `<p><strong>${escapeHtml(
+      GestaoLogic.importResultSummary(result)
+    )}</strong></p>`;
+    if (result.errors.length) {
+      const shown = result.errors.slice(0, 100);
+      body += `
+        <table class="data-table">
+          <thead><tr><th>Linha</th><th>Campo</th><th>Motivo</th></tr></thead>
+          <tbody>${shown
+            .map(
+              (error) => `<tr>
+                <td>${error.line}</td>
+                <td>${escapeHtml(error.field || "—")}</td>
+                <td>${escapeHtml(error.message)}</td>
+              </tr>`
+            )
+            .join("")}</tbody>
+        </table>`;
+      if (result.errors.length > shown.length) {
+        body += `<p class="muted">Exibindo os primeiros ${shown.length} erros de ${result.errors.length}.</p>`;
+      }
+    }
+  }
+  return `
+    <div class="form-card" id="athlete-import">
+      <div class="row between">
+        <h2>Importar planilha</h2>
+        <button class="danger" data-action="close-import" title="Fechar">✖</button>
+      </div>
+      <div class="import-drop" id="athlete-import-drop">
+        <p>Arraste o arquivo aqui ou selecione abaixo.</p>
+        <p class="muted">CSV ou XLSX · colunas NOME, EQUIPE, NAIPE, CATEGORIA · até 2 MB e 1000 linhas</p>
+        <label class="file-btn">Selecionar arquivo
+          <input id="athlete-import-input" type="file" accept=".csv,.xlsx" hidden />
+        </label>
+      </div>
+      ${body}
+    </div>`;
+}
+
+function athleteResultsHTML() {
+  const info = GestaoLogic.paginationInfo(
+    athletesState.total,
+    athletesState.limit,
+    athletesState.offset
+  );
+  if (!athletesState.items.length) {
+    return `
+      <div class="empty-state">
+        <p>Nenhum atleta encontrado.</p>
+        <p class="muted">Cadastre manualmente ou importe uma planilha.</p>
+      </div>
+      <div class="pagination-row">
+        <span class="muted">${athletesState.total} atleta(s)</span>
+      </div>`;
+  }
+  const rows = athletesState.items
+    .map(
+      (athlete) => `
+      <tr>
+        <td>${escapeHtml(athlete.name)}</td>
+        <td>${escapeHtml(athlete.team_name || "—")}</td>
+        <td>${GestaoLogic.naipeLabel(athlete.naipe)}</td>
+        <td>${escapeHtml(athlete.category || "—")}</td>
+        <td class="row-actions">
+          <button data-action="edit-athlete" data-id="${athlete.id}" title="Editar">✏️</button>
+          <button class="danger" data-action="delete-athlete" data-id="${athlete.id}" title="Excluir">🗑</button>
+        </td>
+      </tr>`
+    )
+    .join("");
+  return `
+    <table class="data-table">
+      <thead><tr><th>Nome</th><th>Equipe</th><th>Naipe</th><th>Categoria</th><th></th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+    <div class="pagination-row">
+      <button data-action="athletes-prev" ${info.hasPrev ? "" : "disabled"}>← Anterior</button>
+      <span class="muted">Página ${info.page} de ${info.pages} · ${athletesState.total} atleta(s)</span>
+      <button data-action="athletes-next" ${info.hasNext ? "" : "disabled"}>Próxima →</button>
+    </div>`;
+}
+
+function athletesFiltersHTML() {
+  const categories = GestaoLogic.distinctCategories(allAthletes);
+  return `
+    <div class="filters-row">
+      <input type="search" data-athlete-filter="q" placeholder="Buscar por nome"
+        value="${escapeHtml(athletesState.q)}" />
+      <select data-athlete-filter="teamId">
+        <option value="">Todas as equipes</option>
+        ${eventData.teams
+          .map(
+            (team) =>
+              `<option value="${team.id}" ${
+                team.id === athletesState.teamId ? "selected" : ""
+              }>${escapeHtml(team.name)}</option>`
+          )
+          .join("")}
+      </select>
+      <select data-athlete-filter="naipe">
+        <option value="">Todos os naipes</option>
+        <option value="F" ${athletesState.naipe === "F" ? "selected" : ""}>Feminino</option>
+        <option value="M" ${athletesState.naipe === "M" ? "selected" : ""}>Masculino</option>
+      </select>
+      <select data-athlete-filter="category">
+        <option value="">Todas as categorias</option>
+        ${categories
+          .map(
+            (category) =>
+              `<option value="${escapeHtml(category)}" ${
+                category === athletesState.category ? "selected" : ""
+              }>${escapeHtml(category)}</option>`
+          )
+          .join("")}
+      </select>
+      <button data-action="clear-athlete-filters">Limpar</button>
+    </div>`;
+}
+
+function renderAthletes() {
+  if (!eventData) return;
+  els.athletes.innerHTML = `
+    <div class="section-head">
+      <h2>Atletas</h2>
+      <div class="actions">
+        <button class="primary" data-action="new-athlete">+ Novo Atleta</button>
+        <button data-action="open-import">📥 Importar planilha</button>
+        <button data-action="download-template-csv">Modelo CSV</button>
+        <button data-action="download-template-xlsx">Modelo XLSX</button>
+        <button data-action="export-athletes">Exportar CSV</button>
+      </div>
+    </div>
+    <p class="muted">Cadastre previamente toda a equipe ou importe uma planilha. Nas raias, os atletas cadastrados podem ser selecionados pelo nome.</p>
+    ${athleteForm ? athleteFormHTML() : ""}
+    ${athleteImportHTML()}
+    ${athletesFiltersHTML()}
+    <div id="athlete-results">${athleteResultsHTML()}</div>
+  `;
+  wireAthletes();
+}
+
+function wireAthletes() {
+  els.athletes
+    .querySelectorAll("[data-athlete-filter]")
+    .forEach((field) => {
+      const name = field.dataset.athleteFilter;
+      const apply = () => {
+        if (name === "q") {
+          clearTimeout(athleteSearchTimer);
+          athleteSearchTimer = setTimeout(() => {
+            applyAthleteFilter(name, field.value);
+          }, 300);
+        } else {
+          applyAthleteFilter(name, field.value);
+        }
+      };
+      field.addEventListener(
+        field.tagName === "SELECT" ? "change" : "input",
+        apply
+      );
+    });
+
+  const fileInput = document.getElementById("athlete-import-input");
+  if (fileInput) {
+    fileInput.addEventListener("change", () => {
+      if (fileInput.files && fileInput.files[0]) {
+        startAthleteImport(fileInput.files[0]);
+      }
+    });
+  }
+
+  const drop = document.getElementById("athlete-import-drop");
+  if (drop) {
+    drop.addEventListener("dragover", (event) => {
+      event.preventDefault();
+      drop.classList.add("over");
+    });
+    drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+    drop.addEventListener("drop", (event) => {
+      event.preventDefault();
+      drop.classList.remove("over");
+      const file = event.dataTransfer.files && event.dataTransfer.files[0];
+      if (file) startAthleteImport(file);
+    });
+  }
+
+  if (athleteForm) {
+    const nameInput = document.getElementById("af-name");
+    if (nameInput) nameInput.focus();
+  }
+}
+
+async function applyAthleteFilter(name, value) {
+  athletesState[name] = value;
+  athletesState.offset = 0;
+  await reloadAthleteResults();
+}
+
+async function reloadAthleteResults() {
+  try {
+    await loadAthletePage();
+    const container = document.getElementById("athlete-results");
+    if (container) container.innerHTML = athleteResultsHTML();
+  } catch (error) {
+    showToast(`Erro ao carregar atletas: ${error.message}`, true);
+  }
+}
+
+async function changeAthletePage(delta) {
+  const next = athletesState.offset + delta * athletesState.limit;
+  if (next < 0) return;
+  athletesState.offset = next;
+  await reloadAthleteResults();
+}
+
+async function clearAthleteFilters() {
+  athletesState.q = "";
+  athletesState.teamId = "";
+  athletesState.naipe = "";
+  athletesState.category = "";
+  athletesState.offset = 0;
+  await reloadAthleteResults();
+  renderAthletes();
+}
+
+async function saveAthleteForm(button) {
+  const name = document.getElementById("af-name").value.trim();
+  if (!name) {
+    setFieldError("athlete-error", "Informe o nome do atleta");
+    return;
+  }
+  setFieldError("athlete-error", "");
+  const payload = {
+    name,
+    naipe: document.getElementById("af-naipe").value,
+    category:
+      document.getElementById("af-category").value.trim() || null,
+    team_id: document.getElementById("af-team").value || null,
+  };
+  await withButton(button, async () => {
+    if (athleteForm.mode === "edit") {
+      await api("PATCH", `/api/athletes/${athleteForm.id}`, payload);
+    } else {
+      await api("POST", `/api/events/${eventId}/athletes`, payload);
+    }
+    athleteForm = null;
+  });
+}
+
+async function deleteAthlete(athleteId) {
+  const athlete = allAthletes.find((item) => item.id === athleteId);
+  if (
+    !window.confirm(
+      `Excluir o atleta "${athlete ? athlete.name : ""}"?`
+    )
+  ) {
+    return;
+  }
+  try {
+    await api("DELETE", `/api/athletes/${athleteId}`);
+    await loadAthleteData();
+    renderAll();
+    showToast("Atleta excluído");
+  } catch (error) {
+    showToast(`Erro: ${error.message}`, true);
+  }
+}
+
+async function startAthleteImport(file) {
+  if (!/\.(csv|xlsx)$/i.test(file.name)) {
+    showToast("Formato inválido: use CSV ou XLSX", true);
+    return;
+  }
+  athleteImport = {
+    fileName: file.name,
+    busy: true,
+    result: null,
+    error: null,
+  };
+  renderAthletes();
+
+  const body = new FormData();
+  body.append("file", file);
+  try {
+    const response = await fetch(
+      `/api/events/${eventId}/athletes/import`,
+      { method: "POST", body }
+    );
+    let payload = null;
+    try {
+      payload = await response.json();
+    } catch (error) {
+      /* resposta sem JSON */
+    }
+    if (!response.ok) {
+      throw new Error(
+        payload && payload.detail ? payload.detail : response.statusText
+      );
+    }
+    athleteImport = {
+      fileName: file.name,
+      busy: false,
+      result: payload,
+      error: null,
+    };
+    await loadAthleteData();
+    renderAll();
+    showToast("Importação concluída");
+  } catch (error) {
+    athleteImport = {
+      fileName: file.name,
+      busy: false,
+      result: null,
+      error: error.message,
+    };
+    renderAthletes();
+    showToast(`Erro na importação: ${error.message}`, true);
+  }
+}
+
+function downloadAthletes(path) {
+  const link = document.createElement("a");
+  link.href = path;
+  link.download = "";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+}
+
 async function loadClassification(provaId) {
   try {
     classificationByProva[provaId] = await api(
@@ -1099,7 +1581,7 @@ function switchSection(section) {
   }
   setDirty(false);
   activeSection = section;
-  for (const name of ["overview", "heats", "teams", "settings"]) {
+  for (const name of ["overview", "heats", "teams", "athletes", "settings"]) {
     els[name].hidden = name !== section;
   }
   renderSidebar();
@@ -1112,7 +1594,7 @@ function openSection(section, callback) {
   }
   setDirty(false);
   activeSection = section;
-  for (const name of ["overview", "heats", "teams", "settings"]) {
+  for (const name of ["overview", "heats", "teams", "athletes", "settings"]) {
     els[name].hidden = name !== section;
   }
   renderSidebar();
@@ -1204,6 +1686,48 @@ els.main.addEventListener("click", (event) => {
     deleteTeam(target.dataset.id);
   } else if (action === "remove-logo") {
     removeTeamLogo(target.dataset.id);
+  } else if (action === "new-athlete") {
+    athleteForm = { mode: "create" };
+    athleteImport = null;
+    renderAthletes();
+  } else if (action === "open-import") {
+    athleteImport = {
+      fileName: "",
+      busy: false,
+      result: null,
+      error: null,
+    };
+    athleteForm = null;
+    renderAthletes();
+  } else if (action === "edit-athlete") {
+    athleteForm = { mode: "edit", id: target.dataset.id };
+    renderAthletes();
+  } else if (action === "cancel-athlete") {
+    athleteForm = null;
+    renderAthletes();
+  } else if (action === "confirm-athlete") {
+    saveAthleteForm(target);
+  } else if (action === "delete-athlete") {
+    deleteAthlete(target.dataset.id);
+  } else if (action === "athletes-prev") {
+    changeAthletePage(-1);
+  } else if (action === "athletes-next") {
+    changeAthletePage(1);
+  } else if (action === "clear-athlete-filters") {
+    clearAthleteFilters();
+  } else if (action === "download-template-csv") {
+    downloadAthletes(
+      `/api/events/${eventId}/athletes/import-template?format=csv`
+    );
+  } else if (action === "download-template-xlsx") {
+    downloadAthletes(
+      `/api/events/${eventId}/athletes/import-template?format=xlsx`
+    );
+  } else if (action === "export-athletes") {
+    downloadAthletes(`/api/events/${eventId}/athletes/export`);
+  } else if (action === "close-import") {
+    athleteImport = null;
+    renderAthletes();
   } else if (action === "save-settings") {
     saveSettings(target);
   } else if (action === "delete-event") {
@@ -1211,7 +1735,10 @@ els.main.addEventListener("click", (event) => {
   }
 });
 
-els.main.addEventListener("input", () => setDirty(true));
+els.main.addEventListener("input", (event) => {
+  if (event.target.closest("[data-athlete-filter]")) return;
+  setDirty(true);
+});
 els.eventName.addEventListener("input", () => setDirty(true));
 els.eventName.addEventListener("keydown", (event) => {
   if (event.key === "Enter") els.eventName.blur();
@@ -1320,6 +1847,15 @@ const ws = new WSClient(wsUrl(), (message) => {
     }
   } else if (message.type === "error") {
     showToast(message.message || "Erro na operação", true);
+  } else if (message.type === "athletes_changed") {
+    if (message.payload && message.payload.event_id === eventId) {
+      clearTimeout(athleteRefreshTimer);
+      athleteRefreshTimer = setTimeout(() => {
+        loadEvent().catch((error) =>
+          showToast(`Erro ao atualizar atletas: ${error.message}`, true)
+        );
+      }, 300);
+    }
   }
 });
 

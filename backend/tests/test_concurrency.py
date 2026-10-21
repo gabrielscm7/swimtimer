@@ -61,7 +61,15 @@ async def _event(client):
 async def _heat(client, event_id, **overrides):
     body = {"name": "Prova", "heat_type": "bateria", "distance_m": 25}
     body.update(overrides)
-    response = await client.post(f"/api/events/{event_id}/heats", json=body)
+    prova_response = await client.post(
+        f"/api/events/{event_id}/provas",
+        json={"name": body["name"]},
+    )
+    assert prova_response.status_code == 201, prova_response.text
+    prova = prova_response.json()
+    response = await client.post(
+        f"/api/provas/{prova['id']}/heats", json=body
+    )
     assert response.status_code == 201, response.text
     return response.json()
 
