@@ -646,6 +646,7 @@ const ws = new WSClient(wsUrl(), (message) => {
         order_num: message.payload.order_num,
         stroke: message.payload.stroke,
         distance_m: message.payload.distance_m,
+        naipe: message.payload.naipe,
         category: message.payload.category,
         consolidate_results: message.payload.consolidate_results,
         classification_criterion: message.payload.classification_criterion,

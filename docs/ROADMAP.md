@@ -78,6 +78,19 @@
 
 ---
 
+## Versão 2.3 — Hierarquia de ordens e naipe da prova (concluída)
+
+**Objetivo:** deixar explícita a hierarquia Evento → Prova → Bateria, corrigir a
+reordenação e estruturar o naipe da prova.
+
+- [x] Naipe estruturado na prova (M/F) separado da categoria de idade
+- [x] Migração 0006 com backfill de naipe a partir do texto legado
+- [x] Campo de ordem na bateria (única por prova) e contexto nos rótulos
+- [x] Reordenação batch transacional de provas e baterias (corrige colisão)
+- [x] Aviso visual de naipe divergente na alocação de atletas
+- [x] Mensagens de erro da gestão traduzidas para PT-BR
+- [x] Testes de reorder, naipe e migração 0006
+
 ## Versão 2.2 — Gestão de equipes e atletas (concluída)
 
 **Objetivo:** cadastro prévio de toda a equipe, inclusive por planilha, com

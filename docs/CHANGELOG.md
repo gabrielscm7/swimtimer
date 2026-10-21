@@ -4,6 +4,35 @@ Formato: [Semantic Versioning](https://semver.org/lang/pt-BR/)
 
 ---
 
+## [2.3.0] — 2026-10-21
+
+### Added
+- Campo estruturado `prova.naipe` (`M`/`F`, opcional), separado de
+  `prova.category` (categoria de idade); select **Naipe** (Feminino/Masculino/
+  Não definido) no formulário de prova
+- Migração `0006_prova_naipe` com backfill: extrai o naipe de categorias legadas
+  ("masculino, sub-12" → naipe `M`, categoria `SUB-12`)
+- Campo **"Ordem na prova"** no formulário de bateria, sugerindo a próxima ordem
+  e rejeitando duplicatas dentro da mesma prova
+- Endpoints batch transacionais `PUT /api/events/{id}/provas/order` e
+  `PUT /api/provas/{id}/heats/order` (body `{ids:[...]}`)
+- Aviso visual quando o naipe do atleta difere do naipe da prova (sem bloqueio)
+- Testes de reordenação, naipe de prova, migração 0006 e lógica frontend
+
+### Changed
+- Drag-and-drop de provas/baterias reordena em **uma única chamada** (antes:
+  sequência de PATCHes que falhava ao mover um item para baixo)
+- Rótulos com contexto: accordion "Bateria N · nome" e visão geral "B1";
+  formulário de prova com "Ordem no programa do evento"
+- Mensagens de erro da gestão traduzidas para PT-BR e contextualizadas
+- `prova.category` é normalizada (trim + maiúsculas), como a categoria de atleta
+
+### Fixed
+- Reordenação não colide mais com o índice único durante a operação
+  (erro `order_num_duplicado` ao mover itens para baixo)
+- Ordem de bateria pode se repetir entre provas diferentes (única por prova),
+  coberta por teste de regressão
+
 ## [2.2.0] — 2026-10-21
 
 ### Added

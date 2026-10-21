@@ -80,7 +80,7 @@ async def test_prova_classification_config_persists(client):
         json={
             "consolidate_results": False,
             "classification_criterion": "lowest_time",
-            "category": "feminino",
+            "category": "sub-12",
         },
     )
     assert response.status_code == 200, response.text
@@ -88,7 +88,7 @@ async def test_prova_classification_config_persists(client):
 
     detail = (await client.get(f"/api/provas/{prova['id']}")).json()
     assert detail["consolidate_results"] is False
-    assert detail["category"] == "feminino"
+    assert detail["category"] == "SUB-12"
 
 
 @pytest.mark.asyncio
@@ -168,3 +168,55 @@ async def test_event_delete_removes_provas(client):
     response = await client.delete(f"/api/events/{event['id']}")
     assert response.status_code == 204, response.text
     assert (await client.get(f"/api/provas/{prova['id']}")).status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_prova_naipe_and_category_are_structured(client):
+    event = await create_event(client)
+    prova = await create_prova(
+        client,
+        event["id"],
+        name="Peito 50m",
+        distance_m=50,
+        category="sub-12",
+        naipe="f",
+    )
+    assert prova["naipe"] == "F"
+    assert prova["category"] == "SUB-12"
+
+    listing = (await client.get(f"/api/events/{event['id']}/provas")).json()
+    assert listing[0]["naipe"] == "F"
+
+    detail = (await client.get(f"/api/events/{event['id']}")).json()
+    assert detail["provas"][0]["naipe"] == "F"
+
+
+@pytest.mark.asyncio
+async def test_prova_naipe_alias_and_validation(client):
+    event = await create_event(client)
+    prova = await create_prova(client, event["id"], naipe="Masculino")
+    assert prova["naipe"] == "M"
+
+    response = await client.post(
+        f"/api/events/{event['id']}/provas",
+        json={"name": "Inválida", "naipe": "X"},
+    )
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_update_prova_naipe(client):
+    event = await create_event(client)
+    prova = await create_prova(client, event["id"], naipe="M")
+
+    response = await client.patch(
+        f"/api/provas/{prova['id']}", json={"naipe": "feminino"}
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["naipe"] == "F"
+
+    cleared = await client.patch(
+        f"/api/provas/{prova['id']}", json={"naipe": None}
+    )
+    assert cleared.status_code == 200, cleared.text
+    assert cleared.json()["naipe"] is None

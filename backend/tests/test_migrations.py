@@ -207,3 +207,52 @@ def test_migration_0005_preserves_legacy_lanes(tmp_path, monkeypatch):
     finally:
         con.close()
     assert duplicate_blocked, "indice unico de atleta nao foi aplicado"
+
+
+def test_migration_0006_backfills_prova_naipe(tmp_path, monkeypatch):
+    db = tmp_path / "legacy_naipe.db"
+    monkeypatch.setattr(
+        settings, "DATABASE_URL", f"sqlite+aiosqlite:///{db}"
+    )
+    config = _alembic_config()
+
+    command.upgrade(config, "0005_athlete")
+
+    con = sqlite3.connect(db)
+    con.execute(
+        "INSERT INTO event (id, name, pool_length_m, status, created_at) "
+        "VALUES ('e1', 'Evento', 25, 'draft', 0)"
+    )
+    provas = [
+        ("p1", "Peito 50m", 1, "masculino, sub-12"),
+        ("p2", "Costas 50m", 2, "Feminino SUB-14"),
+        ("p3", "Livre 100m", 3, "SUB-16"),
+        ("p4", "Peito 100m", 4, None),
+    ]
+    for prova_id, name, order_num, category in provas:
+        con.execute(
+            "INSERT INTO prova (id, event_id, name, order_num, stroke, "
+            "distance_m, category, consolidate_results, "
+            "classification_criterion, status, created_at) "
+            "VALUES (?, 'e1', ?, ?, NULL, NULL, ?, 1, 'lowest_time', "
+            "'scheduled', 0)",
+            (prova_id, name, order_num, category),
+        )
+    con.commit()
+    con.close()
+
+    command.upgrade(config, "head")
+
+    con = sqlite3.connect(db)
+    rows = {
+        row[0]: row[1]
+        for row in con.execute(
+            "SELECT id, COALESCE(naipe, '') || '|' || "
+            "COALESCE(category, '') FROM prova"
+        )
+    }
+    con.close()
+    assert rows["p1"] == "M|SUB-12"
+    assert rows["p2"] == "F|SUB-14"
+    assert rows["p3"] == "|SUB-16"
+    assert rows["p4"] == "|"

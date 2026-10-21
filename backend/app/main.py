@@ -43,6 +43,7 @@ from .schemas import (
     HeatUpdate,
     HeatLaneConfigRequest,
     LaneUpdate,
+    OrderIdsRequest,
     ProvaCreate,
     ProvaUpdate,
     TeamCreate,
@@ -90,7 +91,7 @@ async def lifespan(app: FastAPI):
     await engine.dispose()
 
 
-app = FastAPI(title="SwimTimer", version="2.2.0", lifespan=lifespan)
+app = FastAPI(title="SwimTimer", version="2.3.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -374,6 +375,7 @@ async def _provas_payload(
                 "stroke": prova.stroke,
                 "distance_m": prova.distance_m,
                 "category": prova.category,
+                "naipe": prova.naipe,
                 "consolidate_results": prova.consolidate_results,
                 "classification_criterion": prova.classification_criterion,
                 "status": prova_status([heat.status for heat in prova_heats]),
@@ -446,6 +448,8 @@ async def _classification_payload(
     return {
         "prova_id": prova.id,
         "name": prova.name,
+        "naipe": prova.naipe,
+        "category": prova.category,
         "status": classification["status"],
         "consolidate_results": prova.consolidate_results,
         "classification_criterion": prova.classification_criterion,
@@ -499,6 +503,7 @@ async def _event_payload(
                 "stroke": prova.stroke,
                 "distance_m": prova.distance_m,
                 "category": prova.category,
+                "naipe": prova.naipe,
                 "consolidate_results": prova.consolidate_results,
                 "classification_criterion": prova.classification_criterion,
                 "status": prova.status,
@@ -636,7 +641,7 @@ async def _maybe_finish_heat(session: AsyncSession, heat: Heat) -> bool:
 # --------------------------------------------------------------------------- #
 @app.get("/api/health")
 async def health() -> dict:
-    return {"status": "ok", "version": "2.2.0"}
+    return {"status": "ok", "version": "2.3.0"}
 
 
 @app.get("/api/status")
@@ -922,6 +927,12 @@ async def _get_athlete(session: AsyncSession, athlete_id: str) -> Athlete:
     if athlete is None:
         raise HTTPException(status_code=404, detail="atleta_nao_encontrado")
     return athlete
+
+
+def _validate_reorder_ids(ids: list[str], known: set[str]) -> None:
+    """Exige o conjunto completo de IDs, sem duplicatas ou itens externos."""
+    if len(ids) != len(set(ids)) or set(ids) != known:
+        raise HTTPException(status_code=400, detail="ordem_ids_invalidos")
 
 
 async def _validate_athlete_team(
@@ -1453,6 +1464,7 @@ async def _create_prova_record(
         stroke=payload.stroke,
         distance_m=payload.distance_m,
         category=payload.category,
+        naipe=payload.naipe,
         consolidate_results=payload.consolidate_results,
         classification_criterion=payload.classification_criterion,
         status="scheduled",
@@ -1556,6 +1568,53 @@ async def update_prova(
         payload_out = await _prova_payload(session, prova)
     await manager.broadcast(_prova_state_message(payload_out))
     return payload_out
+
+
+@app.put("/api/events/{event_id}/provas/order")
+async def reorder_provas(
+    event_id: str,
+    payload: OrderIdsRequest,
+    session: AsyncSession = Depends(get_db),
+) -> list[dict]:
+    """Reordena todas as provas do evento em uma unica transacao."""
+    async with _heat_guard(f"event:{event_id}"):
+        session.expire_all()
+        await _get_event(session, event_id)
+        result = await session.execute(
+            select(Prova).where(Prova.event_id == event_id)
+        )
+        provas = list(result.scalars().all())
+        _validate_reorder_ids(payload.ids, {prova.id for prova in provas})
+        if any(prova.status != "scheduled" for prova in provas):
+            raise HTTPException(status_code=409, detail="prova_ja_iniciada")
+
+        # Desloca temporariamente para liberar 1..N sem violar o indice unico.
+        offset = 100000
+        await session.execute(
+            update(Prova)
+            .where(Prova.event_id == event_id)
+            .values(order_num=Prova.order_num + offset),
+            execution_options={"synchronize_session": False},
+        )
+        session.expire_all()
+        for index, prova_id in enumerate(payload.ids):
+            prova = await session.get(Prova, prova_id)
+            prova.order_num = index + 1
+        await session.commit()
+
+        result = await session.execute(
+            select(Prova)
+            .where(Prova.event_id == event_id)
+            .order_by(Prova.order_num)
+        )
+        provas = list(result.scalars().all())
+        payloads = await _provas_payload(
+            session, provas, include_heats=True
+        )
+
+    for prova_payload in payloads:
+        await manager.broadcast(_prova_state_message(prova_payload))
+    return payloads
 
 
 @app.delete("/api/provas/{prova_id}", status_code=204)
@@ -1727,6 +1786,47 @@ async def update_heat(
         await session.refresh(heat)
         await _broadcast_heat(session, heat)
         return await _heat_payload(session, heat)
+
+
+@app.put("/api/provas/{prova_id}/heats/order")
+async def reorder_heats(
+    prova_id: str,
+    payload: OrderIdsRequest,
+    session: AsyncSession = Depends(get_db),
+) -> list[dict]:
+    """Reordena todas as baterias de uma prova em uma unica transacao."""
+    async with _heat_guard(f"prova:{prova_id}"):
+        session.expire_all()
+        prova = await _get_prova(session, prova_id)
+        result = await session.execute(
+            select(Heat).where(Heat.prova_id == prova_id)
+        )
+        heats = list(result.scalars().all())
+        _validate_reorder_ids(payload.ids, {heat.id for heat in heats})
+        if any(
+            heat.status not in ("scheduled", "ready_check")
+            for heat in heats
+        ):
+            raise HTTPException(status_code=409, detail="prova_ja_iniciada")
+
+        offset = 100000
+        await session.execute(
+            update(Heat)
+            .where(Heat.prova_id == prova_id)
+            .values(order_num=Heat.order_num + offset),
+            execution_options={"synchronize_session": False},
+        )
+        session.expire_all()
+        for index, heat_id in enumerate(payload.ids):
+            heat = await session.get(Heat, heat_id)
+            heat.order_num = index + 1
+        await session.commit()
+
+        await session.refresh(prova)
+        payload_out = await _prova_payload(session, prova)
+
+    await manager.broadcast(_prova_state_message(payload_out))
+    return payload_out["heats"]
 
 
 @app.delete("/api/heats/{heat_id}", status_code=204)

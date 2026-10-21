@@ -109,8 +109,19 @@ class ProvaCreate(BaseModel):
     stroke: Optional[str] = Field(default=None, max_length=60)
     distance_m: Optional[int] = Field(default=None, gt=0)
     category: Optional[str] = Field(default=None, max_length=60)
+    naipe: Optional[Naipe] = None
     consolidate_results: bool = True
     classification_criterion: ClassificationCriterion = "lowest_time"
+
+    @field_validator("naipe", mode="before")
+    @classmethod
+    def _normalize_naipe(cls, value: object) -> object:
+        return normalize_naipe(value)
+
+    @field_validator("category", mode="before")
+    @classmethod
+    def _normalize_category(cls, value: object) -> object:
+        return normalize_category(value)
 
 
 class ProvaUpdate(BaseModel):
@@ -119,8 +130,25 @@ class ProvaUpdate(BaseModel):
     stroke: Optional[str] = Field(default=None, max_length=60)
     distance_m: Optional[int] = Field(default=None, gt=0)
     category: Optional[str] = Field(default=None, max_length=60)
+    naipe: Optional[Naipe] = None
     consolidate_results: Optional[bool] = None
     classification_criterion: Optional[ClassificationCriterion] = None
+
+    @field_validator("naipe", mode="before")
+    @classmethod
+    def _normalize_naipe(cls, value: object) -> object:
+        return normalize_naipe(value)
+
+    @field_validator("category", mode="before")
+    @classmethod
+    def _normalize_category(cls, value: object) -> object:
+        return normalize_category(value)
+
+
+class OrderIdsRequest(BaseModel):
+    """Lista completa de IDs na nova ordem (1..N)."""
+
+    ids: list[str] = Field(default_factory=list, max_length=1000)
 
 
 class ProvaResponse(BaseModel):
@@ -133,6 +161,7 @@ class ProvaResponse(BaseModel):
     stroke: str | None = None
     distance_m: int | None = None
     category: str | None = None
+    naipe: str | None = None
     consolidate_results: bool = True
     classification_criterion: str = "lowest_time"
     status: str

@@ -91,6 +91,7 @@ function teamLaneCount(teamId) {
 
 function provaMeta(prova) {
   const parts = [];
+  if (prova.naipe) parts.push(GestaoLogic.naipeLabel(prova.naipe));
   if (prova.stroke) parts.push(prova.stroke);
   if (prova.distance_m) parts.push(`${prova.distance_m}m`);
   if (prova.category) parts.push(prova.category);
@@ -164,7 +165,7 @@ async function refresh() {
     await loadEvent();
     setDirty(false);
   } catch (error) {
-    showToast(`Erro: ${error.message}`, true);
+    showToast(GestaoLogic.gestaoErrorMessage(error), true);
   }
 }
 
@@ -176,7 +177,7 @@ async function withButton(button, fn) {
     setTimeout(refresh, 400);
   } catch (error) {
     showFeedback(button, "error");
-    showToast(`Erro: ${error.message}`, true);
+    showToast(GestaoLogic.gestaoErrorMessage(error), true);
   }
 }
 
@@ -230,7 +231,7 @@ function renderOverview() {
       return `
       <tr data-action="open-heat" data-id="${heat.id}">
         <td>${escapeHtml(prova ? prova.name : "—")}</td>
-        <td>${heat.order_num}</td>
+        <td>B${heat.order_num}</td>
         <td>${escapeHtml(heat.name)}</td>
         <td>${heat.heat_type === "bateria" ? "Bateria" : "Maratona"}</td>
         <td>${heatDistanceText(heat)}</td>
@@ -260,7 +261,7 @@ function renderOverview() {
       <h2>Baterias</h2>
       ${
         heats.length
-          ? `<table class="data-table"><thead><tr><th>Prova</th><th>Ordem</th><th>Nome</th><th>Tipo</th><th>Distância</th><th>Participantes</th><th>Status</th></tr></thead><tbody>${heatRows}</tbody></table>`
+          ? `<table class="data-table"><thead><tr><th>Prova</th><th>Bateria</th><th>Nome</th><th>Tipo</th><th>Distância</th><th>Participantes</th><th>Status</th></tr></thead><tbody>${heatRows}</tbody></table>`
           : `<div class="empty-state"><p>Nenhuma bateria criada.</p></div>`
       }
     </div>
@@ -279,6 +280,10 @@ function teamOptions(selectedId) {
 
 function laneGridHTML(heat) {
   const editable = isEditableHeat(heat);
+  const prova = (eventData.provas || []).find(
+    (item) => item.id === heat.prova_id
+  );
+  const provaNaipe = prova ? prova.naipe || "" : "";
   const existingMax = heat.heat_lanes.reduce(
     (max, lane) => Math.max(max, lane.lane_number),
     0
@@ -299,8 +304,15 @@ function laneGridHTML(heat) {
     const lane = heat.heat_lanes.find((item) => item.lane_number === number);
     const empty =
       !lane || (!lane.participant_name && !lane.athlete_id && !lane.team_id);
+    const naipeMismatch = Boolean(
+      lane &&
+        lane.athlete_id &&
+        provaNaipe &&
+        lane.naipe &&
+        lane.naipe !== provaNaipe
+    );
     cells += `
-      <div class="lane-cell ${empty ? "empty" : ""}">
+      <div class="lane-cell ${empty ? "empty" : ""}" data-prova-naipe="${provaNaipe}">
         <div class="lane-title">RAIA ${number}</div>
         <label>Participante</label>
         <input type="text" data-lane-input="${number}" list="athlete-datalist"
@@ -317,6 +329,7 @@ function laneGridHTML(heat) {
             ? '<p class="muted lane-athlete-hint" style="margin:4px 0 0">Atleta cadastrado</p>'
             : ""
         }
+        <p class="lane-naipe-warning" ${naipeMismatch ? "" : "hidden"}>Naipe do atleta difere do naipe da prova.</p>
         ${
           editable
             ? `<div class="lane-actions"><button data-action="save-lane" data-heat="${heat.id}" data-lane="${number}">Salvar raia</button></div>`
@@ -342,7 +355,7 @@ function accordionHTML(heat) {
       <div class="accordion-header" draggable="true" data-drag-heat="${heat.id}" data-prova="${heat.prova_id}">
         <span class="drag-handle">⠿</span>
         <span class="accordion-title" data-action="toggle-heat" data-id="${heat.id}">
-          <strong>${heat.order_num}.</strong> ${escapeHtml(heat.name)}
+          <strong>${escapeHtml(GestaoLogic.bateriaLabel(heat))}</strong>
         </span>
         <span class="status-pill">${heatTypeLabel(heat)}</span>
         <span class="status-pill ${heat.status}">${statusLabel(heat.status)}</span>
@@ -368,6 +381,9 @@ function heatFormHTML() {
     ? Math.round((heat.duration_s || 10800) / 3600)
     : 3;
   const laneCount = heatForm.laneCount || 3;
+  const order = editing
+    ? heat.order_num
+    : GestaoLogic.nextHeatOrder(heatsOfProva(heatForm.provaId));
   return `
     <div class="form-card" id="heat-form">
       <h2>${editing ? "Editar bateria" : "Nova bateria"}${
@@ -378,6 +394,11 @@ function heatFormHTML() {
           <label>Nome da bateria</label>
           <input id="hf-name" type="text" placeholder="Ex: Bateria 1"
             value="${escapeHtml(heat ? heat.name : "")}" />
+        </div>
+        <div>
+          <label>Ordem na prova</label>
+          <input id="hf-order" type="number" min="1" value="${order}" />
+          <p class="muted" style="margin:4px 0 0">Única dentro desta prova; reinicia em 1 a cada prova.</p>
         </div>
         <div>
           <label>Tipo</label>
@@ -436,6 +457,7 @@ function provaFormHTML() {
   const stroke = prova ? prova.stroke || "" : "";
   const distance = prova && prova.distance_m ? prova.distance_m : "";
   const category = prova ? prova.category || "" : "";
+  const naipe = prova ? prova.naipe || "" : "";
   const consolidate = prova ? prova.consolidate_results : true;
   return `
     <div class="form-card" id="prova-form">
@@ -447,9 +469,10 @@ function provaFormHTML() {
             value="${escapeHtml(name)}" />
         </div>
         <div>
-          <label>Ordem</label>
+          <label>Ordem no programa do evento</label>
           <input id="pf-order" type="number" min="1" value="${escapeHtml(order)}"
             ${locked ? "disabled" : ""} />
+          <p class="muted" style="margin:4px 0 0">Única entre as provas do evento; vazio = próxima.</p>
         </div>
         <div>
           <label>Modalidade / estilo</label>
@@ -462,8 +485,16 @@ function provaFormHTML() {
             value="${escapeHtml(distance)}" ${locked ? "disabled" : ""} />
         </div>
         <div>
-          <label>Categoria / gênero</label>
-          <input id="pf-category" type="text" placeholder="Ex: masculino, sub-12"
+          <label>Naipe</label>
+          <select id="pf-naipe" ${locked ? "disabled" : ""}>
+            <option value="" ${naipe === "" ? "selected" : ""}>Não definido</option>
+            <option value="F" ${naipe === "F" ? "selected" : ""}>Feminino</option>
+            <option value="M" ${naipe === "M" ? "selected" : ""}>Masculino</option>
+          </select>
+        </div>
+        <div>
+          <label>Categoria (idade)</label>
+          <input id="pf-category" type="text" maxlength="60" placeholder="Ex: SUB-12"
             value="${escapeHtml(category)}" />
         </div>
         <div>
@@ -651,15 +682,24 @@ function wireAthleteDatalist() {
   const index = GestaoLogic.athleteLabelIndex(allAthletes);
   els.heats.querySelectorAll("[data-lane-input]").forEach((input) => {
     input.addEventListener("input", () => {
+      const cell = input.closest(".lane-cell");
       const athlete = index.get(input.value.trim());
-      const teamSelect = input
-        .closest(".lane-cell")
-        .querySelector("[data-lane-team]");
+      const teamSelect = cell.querySelector("[data-lane-team]");
+      const warning = cell.querySelector(".lane-naipe-warning");
+      const provaNaipe = cell.dataset.provaNaipe || "";
       if (athlete) {
         input.dataset.athleteId = athlete.id;
         if (teamSelect) teamSelect.value = athlete.team_id || "";
+        if (warning) {
+          warning.hidden = !(
+            provaNaipe &&
+            athlete.naipe &&
+            athlete.naipe !== provaNaipe
+          );
+        }
       } else {
         delete input.dataset.athleteId;
+        if (warning) warning.hidden = true;
       }
     });
   });
@@ -730,17 +770,12 @@ async function handleProvaDrop(targetId) {
   const [moved] = ordered.splice(from, 1);
   ordered.splice(to, 0, moved);
   try {
-    for (let index = 0; index < ordered.length; index += 1) {
-      const prova = ordered[index];
-      if (prova.order_num !== index + 1) {
-        await api("PATCH", `/api/provas/${prova.id}`, {
-          order_num: index + 1,
-        });
-      }
-    }
+    await api("PUT", `/api/events/${eventId}/provas/order`, {
+      ids: ordered.map((prova) => prova.id),
+    });
     await refresh();
   } catch (error) {
-    showToast(`Erro: ${error.message}`, true);
+    showToast(gestaoErrorMessage(error), true);
   }
 }
 
@@ -759,15 +794,12 @@ async function handleHeatDrop(targetId, provaId) {
   const [moved] = ordered.splice(from, 1);
   ordered.splice(to, 0, moved);
   try {
-    for (let index = 0; index < ordered.length; index += 1) {
-      const heat = ordered[index];
-      if (heat.order_num !== index + 1) {
-        await api("PATCH", `/api/heats/${heat.id}`, { order_num: index + 1 });
-      }
-    }
+    await api("PUT", `/api/provas/${provaId}/heats/order`, {
+      ids: ordered.map((heat) => heat.id),
+    });
     await refresh();
   } catch (error) {
-    showToast(`Erro: ${error.message}`, true);
+    showToast(gestaoErrorMessage(error), true);
   }
 }
 
@@ -784,6 +816,7 @@ async function saveProvaForm(button) {
     name,
     stroke: form.querySelector("#pf-stroke").value.trim() || null,
     category: form.querySelector("#pf-category").value.trim() || null,
+    naipe: form.querySelector("#pf-naipe").value || null,
   };
   const orderInput = form.querySelector("#pf-order");
   if (orderInput && !orderInput.disabled && orderInput.value) {
@@ -838,6 +871,10 @@ async function saveHeatForm(button) {
   const laneCount = Number(form.querySelector("#hf-lanes").value);
 
   const payload = { name };
+  const orderInput = form.querySelector("#hf-order");
+  if (orderInput && orderInput.value) {
+    payload.order_num = Number(orderInput.value);
+  }
   if (type === "bateria") {
     payload.distance_m = Number(form.querySelector("#hf-distance").value);
   } else {
@@ -925,7 +962,7 @@ async function deleteHeat(heatId) {
     await refresh();
     showToast("Bateria excluída");
   } catch (error) {
-    showToast(`Erro: ${error.message}`, true);
+    showToast(GestaoLogic.gestaoErrorMessage(error), true);
   }
 }
 
@@ -946,7 +983,7 @@ async function deleteProva(provaId) {
     await refresh();
     showToast("Prova excluída");
   } catch (error) {
-    showToast(`Erro: ${error.message}`, true);
+    showToast(GestaoLogic.gestaoErrorMessage(error), true);
   }
 }
 
@@ -1037,7 +1074,7 @@ async function commitTeamRename(input) {
     showToast("Equipe renomeada");
   } catch (error) {
     input.value = team.name;
-    showToast(`Erro: ${error.message}`, true);
+    showToast(GestaoLogic.gestaoErrorMessage(error), true);
   }
 }
 
@@ -1070,7 +1107,7 @@ async function uploadTeamLogo(teamId, file) {
     await refresh();
     showToast("Logo atualizado");
   } catch (error) {
-    showToast(`Erro: ${error.message}`, true);
+    showToast(GestaoLogic.gestaoErrorMessage(error), true);
   }
 }
 
@@ -1080,7 +1117,7 @@ async function removeTeamLogo(teamId) {
     await refresh();
     showToast("Logo removido");
   } catch (error) {
-    showToast(`Erro: ${error.message}`, true);
+    showToast(GestaoLogic.gestaoErrorMessage(error), true);
   }
 }
 
@@ -1106,7 +1143,7 @@ async function deleteTeam(teamId) {
     await refresh();
     showToast("Equipe excluída");
   } catch (error) {
-    showToast(`Erro: ${error.message}`, true);
+    showToast(GestaoLogic.gestaoErrorMessage(error), true);
   }
 }
 
@@ -1172,7 +1209,7 @@ function athleteImportHTML() {
               (error) => `<tr>
                 <td>${error.line}</td>
                 <td>${escapeHtml(error.field || "—")}</td>
-                <td>${escapeHtml(error.message)}</td>
+                <td>${escapeHtml(GestaoLogic.gestaoErrorMessage(error.message))}</td>
               </tr>`
             )
             .join("")}</tbody>
@@ -1364,7 +1401,7 @@ async function reloadAthleteResults() {
     const container = document.getElementById("athlete-results");
     if (container) container.innerHTML = athleteResultsHTML();
   } catch (error) {
-    showToast(`Erro ao carregar atletas: ${error.message}`, true);
+    showToast(`Erro ao carregar atletas: ${GestaoLogic.gestaoErrorMessage(error)}`, true);
   }
 }
 
@@ -1424,7 +1461,7 @@ async function deleteAthlete(athleteId) {
     renderAll();
     showToast("Atleta excluído");
   } catch (error) {
-    showToast(`Erro: ${error.message}`, true);
+    showToast(GestaoLogic.gestaoErrorMessage(error), true);
   }
 }
 
@@ -1473,10 +1510,10 @@ async function startAthleteImport(file) {
       fileName: file.name,
       busy: false,
       result: null,
-      error: error.message,
+      error: GestaoLogic.gestaoErrorMessage(error),
     };
     renderAthletes();
-    showToast(`Erro na importação: ${error.message}`, true);
+    showToast(`Erro na importação: ${GestaoLogic.gestaoErrorMessage(error)}`, true);
   }
 }
 
@@ -1498,7 +1535,7 @@ async function loadClassification(provaId) {
     expandedProvas.add(provaId);
     renderHeats();
   } catch (error) {
-    showToast(`Erro: ${error.message}`, true);
+    showToast(GestaoLogic.gestaoErrorMessage(error), true);
   }
 }
 
@@ -1570,7 +1607,7 @@ async function deleteEvent() {
     await api("DELETE", `/api/events/${eventId}`);
     window.location.href = "index.html";
   } catch (error) {
-    showToast(`Erro: ${error.message}`, true);
+    showToast(GestaoLogic.gestaoErrorMessage(error), true);
   }
 }
 
@@ -1756,7 +1793,7 @@ els.eventName.addEventListener("change", async () => {
     showToast("Nome atualizado");
   } catch (error) {
     els.eventName.value = eventData.name;
-    showToast(`Erro: ${error.message}`, true);
+    showToast(GestaoLogic.gestaoErrorMessage(error), true);
   }
 });
 
@@ -1852,7 +1889,7 @@ const ws = new WSClient(wsUrl(), (message) => {
       clearTimeout(athleteRefreshTimer);
       athleteRefreshTimer = setTimeout(() => {
         loadEvent().catch((error) =>
-          showToast(`Erro ao atualizar atletas: ${error.message}`, true)
+          showToast(`Erro ao atualizar atletas: ${GestaoLogic.gestaoErrorMessage(error)}`, true)
         );
       }, 300);
     }
@@ -1864,7 +1901,7 @@ ws.onStatusChange = () => {};
 loadEvent().catch((error) => {
   els.overview.innerHTML = `
     <div class="panel">
-      <p class="muted">Erro ao carregar evento: ${escapeHtml(error.message)}</p>
+      <p class="muted">Erro ao carregar evento: ${escapeHtml(GestaoLogic.gestaoErrorMessage(error))}</p>
       <a href="index.html">← Voltar para Home</a>
     </div>`;
 });

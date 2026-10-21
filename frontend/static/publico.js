@@ -587,6 +587,7 @@ function upsertProva(payload) {
     order_num: payload.order_num,
     stroke: payload.stroke,
     distance_m: payload.distance_m,
+    naipe: payload.naipe,
     category: payload.category,
     consolidate_results: payload.consolidate_results,
     classification_criterion: payload.classification_criterion,

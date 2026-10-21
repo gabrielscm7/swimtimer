@@ -9,6 +9,9 @@ const {
   buildAthleteQuery,
   importResultSummary,
   distinctCategories,
+  nextHeatOrder,
+  bateriaLabel,
+  gestaoErrorMessage,
 } = require("../static/gestao_logic.js");
 
 test("athleteOptionLabel inclui equipe ou marca sem equipe", () => {
@@ -97,4 +100,36 @@ test("distinctCategories ordena e remove vazios", () => {
     { category: "SUB-12" },
   ]);
   assert.deepEqual(categories, ["SUB-12", "SUB-14"]);
+});
+
+test("nextHeatOrder sugere a proxima ordem dentro da prova", () => {
+  assert.equal(nextHeatOrder([]), 1);
+  assert.equal(nextHeatOrder([{ order_num: 1 }, { order_num: 3 }]), 4);
+  assert.equal(nextHeatOrder([{ order_num: 5 }]), 6);
+});
+
+test("bateriaLabel inclui ordem e nome", () => {
+  assert.equal(
+    bateriaLabel({ order_num: 2, name: "Bateria 2" }),
+    "Bateria 2 · Bateria 2"
+  );
+  assert.equal(bateriaLabel({ order_num: 1 }), "Bateria 1");
+  assert.equal(bateriaLabel(null), "Bateria");
+});
+
+test("gestaoErrorMessage traduz codigos conhecidos", () => {
+  assert.match(
+    gestaoErrorMessage({ message: "order_num_duplicado" }),
+    /ordem já está em uso/
+  );
+  assert.match(
+    gestaoErrorMessage({ message: "ordem_ids_invalidos" }),
+    /não corresponde/
+  );
+  assert.equal(
+    gestaoErrorMessage({ message: "colunas_obrigatorias:EQUIPE,NAIPE" }),
+    "Colunas obrigatórias ausentes: EQUIPE, NAIPE."
+  );
+  assert.equal(gestaoErrorMessage({ message: "algo_novo" }), "algo_novo");
+  assert.equal(gestaoErrorMessage(null), "Erro inesperado.");
 });

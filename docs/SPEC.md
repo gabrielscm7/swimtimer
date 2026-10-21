@@ -62,7 +62,7 @@ Event
   status (draft|active|finished), created_at
 
 Prova
-  id, event_id, name, order_num, stroke, distance_m, category
+  id, event_id, name, order_num, stroke, distance_m, naipe (M|F|nulo), category
   consolidate_results (padrão true), classification_criterion (lowest_time)
   status (scheduled|in_progress|finished), created_at
 
@@ -98,6 +98,15 @@ LapEvent
 > atleta (e mantidos em sincronia em `participant_name`/`team_id` para os
 > clientes legados). Raias antigas sem atleta continuam válidas via
 > `participant_name` livre.
+>
+> **Ordens:** `prova.order_num` é único no **evento** (posição no programa) e
+> `heat.order_num` é único dentro da **prova** (reinicia em 1 a cada prova).
+> Reordenações (arrastar-e-soltar) usam endpoints batch que reatribuem 1..N em
+> uma única transação, evitando colisões temporárias com o índice único.
+>
+> **Naipe da prova:** `prova.naipe` (`M`/`F`, opcional) é separado de
+> `prova.category` (categoria de idade, ex.: `SUB-12`). A migração 0006 extrai
+> o naipe de textos legados tipo "masculino, sub-12" e limpa a categoria.
 
 ### 3.2 Tabelas SQL
 
@@ -140,7 +149,8 @@ CREATE TABLE prova (
     order_num                 INTEGER NOT NULL,
     stroke                    TEXT,
     distance_m                INTEGER,
-    category                  TEXT,
+    naipe                     TEXT,          -- M|F (opcional)
+    category                  TEXT,          -- categoria de idade (ex.: SUB-12)
     consolidate_results       BOOLEAN NOT NULL DEFAULT 1,
     classification_criterion  TEXT NOT NULL DEFAULT 'lowest_time',
     status                    TEXT NOT NULL DEFAULT 'scheduled',
@@ -231,10 +241,16 @@ GET    /api/events/{event_id}/provas             → listar (com baterias)
 GET    /api/provas/{prova_id}                    → detalhe
 PATCH  /api/provas/{prova_id}                    → editar
 DELETE /api/provas/{prova_id}                    → deletar (só se todas as baterias scheduled)
+PUT    /api/events/{event_id}/provas/order       → reordenar provas (body {ids:[...]})
 GET    /api/provas/{prova_id}/classification     → classificação consolidada
 POST   /api/provas/{prova_id}/heats              → criar bateria na prova
 GET    /api/provas/{prova_id}/heats              → listar baterias
+PUT    /api/provas/{prova_id}/heats/order        → reordenar baterias (body {ids:[...]})
 ```
+
+Reordenação: o body deve conter **todos** os IDs do escopo (evento para provas,
+prova para baterias), sem duplicatas. Violações retornam `400 ordem_ids_invalidos`;
+itens já iniciados retornam `409 prova_ja_iniciada`.
 
 ### Baterias
 ```

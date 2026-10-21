@@ -64,6 +64,7 @@ class Prova(Base):
     stroke: Mapped[str | None] = mapped_column(String, nullable=True)
     distance_m: Mapped[int | None] = mapped_column(Integer, nullable=True)
     category: Mapped[str | None] = mapped_column(String, nullable=True)
+    naipe: Mapped[str | None] = mapped_column(String, nullable=True)
     consolidate_results: Mapped[bool] = mapped_column(
         Boolean, default=True, nullable=False
     )

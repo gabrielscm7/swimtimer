@@ -35,8 +35,9 @@ Acesse `http://localhost:8080`
 
 ## Versão atual
 
-`v2.2.0` — Gestão de equipes e atletas com importação de planilhas (CSV/XLSX)
+`v2.3.0` — Gestão de equipes/atletas, naipe da prova e reordenação transacional
 
 Hierarquia: **Evento → Prova → Bateria → Raia/Atleta → Resultado**.
-Atletas são cadastrados por evento (nome, equipe, naipe e categoria) e podem ser
-selecionados nas raias; a importação de planilhas preenche toda a equipe de uma vez.
+Provas têm ordem única no programa do evento; baterias têm ordem única dentro da
+própria prova (reinicia em 1). O naipe da prova (Masculino/Feminino) é separado
+da categoria de idade.

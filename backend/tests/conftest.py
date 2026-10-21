@@ -164,6 +164,7 @@ async def create_prova(
     distance_m: int | None = None,
     stroke: str | None = None,
     category: str | None = None,
+    naipe: str | None = None,
 ) -> dict:
     body: dict = {
         "name": name,
@@ -177,6 +178,8 @@ async def create_prova(
         body["stroke"] = stroke
     if category is not None:
         body["category"] = category
+    if naipe is not None:
+        body["naipe"] = naipe
     response = await client.post(f"/api/events/{event_id}/provas", json=body)
     assert response.status_code == 201, response.text
     return response.json()

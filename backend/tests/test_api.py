@@ -17,7 +17,7 @@ from tests.conftest import (
 async def test_health(client):
     response = await client.get("/api/health")
     assert response.status_code == 200
-    assert response.json() == {"status": "ok", "version": "2.2.0"}
+    assert response.json() == {"status": "ok", "version": "2.3.0"}
 
 
 @pytest.mark.asyncio

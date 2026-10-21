@@ -1131,3 +1131,9 @@ button.error {
   border-color: var(--cyan);
   background: var(--row-bg);
 }
+
+.lane-naipe-warning {
+  color: var(--amber);
+  font-size: 0.78rem;
+  margin: 6px 0 0;
+}
