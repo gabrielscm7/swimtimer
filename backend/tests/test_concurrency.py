@@ -154,10 +154,15 @@ async def test_concurrent_laps_unique_numbers(client):
 async def test_concurrent_create_heat_unique_order(client):
     http, factory = client
     event = await _event(http)
+    prova = (
+        await http.post(
+            f"/api/events/{event['id']}/provas", json={"name": "Prova"}
+        )
+    ).json()
 
     async def make(index):
         return await http.post(
-            f"/api/events/{event['id']}/heats",
+            f"/api/provas/{prova['id']}/heats",
             json={"name": f"H{index}", "heat_type": "bateria", "distance_m": 25},
         )
 
@@ -167,7 +172,7 @@ async def test_concurrent_create_heat_unique_order(client):
     async with factory() as session:
         orders = (
             await session.execute(
-                select(Heat.order_num).where(Heat.event_id == event["id"])
+                select(Heat.order_num).where(Heat.prova_id == prova["id"])
             )
         ).scalars().all()
     assert sorted(orders) == [1, 2, 3, 4, 5, 6], f"order_num colidiu: {sorted(orders)}"
@@ -217,3 +222,87 @@ async def test_lap_unique_constraint_holds(client):
         )
         with pytest.raises(IntegrityError):
             await session.commit()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_finish_distinct_lanes_same_heat(client):
+    http, factory = client
+    event = await _event(http)
+    heat = await _heat(http, event["id"])
+    await _lanes(http, heat["id"], [(1, "Ana"), (2, "Bia"), (3, "Caio")])
+    await http.post(f"/api/heats/{heat['id']}/open-ready-check")
+    heat = await _get_heat(http, event["id"], heat["id"])
+    for lane in heat["heat_lanes"]:
+        await http.post(f"/api/lanes/{lane['id']}/ready")
+    await http.post(f"/api/heats/{heat['id']}/start")
+    await asyncio.sleep(0.02)
+
+    responses = await asyncio.gather(
+        *[
+            http.post(f"/api/lanes/{lane['id']}/finish")
+            for lane in heat["heat_lanes"]
+        ]
+    )
+    assert all(r.status_code == 200 for r in responses), [
+        r.text for r in responses
+    ]
+
+    final = await _get_heat(http, event["id"], heat["id"])
+    assert final["status"] == "finished"
+    assert all(
+        lane["race_time_ms"] is not None for lane in final["heat_lanes"]
+    )
+    times = [lane["race_time_ms"] for lane in final["heat_lanes"]]
+    assert len(set(times)) == len(times), f"tempos colidiram: {times}"
+
+
+@pytest.mark.asyncio
+async def test_concurrent_finish_across_provas(client):
+    http, factory = client
+    event = await _event(http)
+    prova = (
+        await http.post(
+            f"/api/events/{event['id']}/provas", json={"name": "Prova"}
+        )
+    ).json()
+    heats = []
+    for index in range(2):
+        heat = (
+            await http.post(
+                f"/api/provas/{prova['id']}/heats",
+                json={
+                    "name": f"Bateria {index}",
+                    "heat_type": "bateria",
+                    "distance_m": 50,
+                },
+            )
+        ).json()
+        await _lanes(http, heat["id"], [(1, f"Atleta {index}")])
+        await http.post(f"/api/heats/{heat['id']}/open-ready-check")
+        current = await _get_heat(http, event["id"], heat["id"])
+        await http.post(
+            f"/api/lanes/{current['heat_lanes'][0]['id']}/ready"
+        )
+        await http.post(f"/api/heats/{heat['id']}/start")
+        heats.append(await _get_heat(http, event["id"], heat["id"]))
+    await asyncio.sleep(0.02)
+
+    responses = await asyncio.gather(
+        *[
+            http.post(f"/api/lanes/{heat['heat_lanes'][0]['id']}/finish")
+            for heat in heats
+        ]
+    )
+    assert all(r.status_code == 200 for r in responses), [
+        r.text for r in responses
+    ]
+
+    classification = (
+        await http.get(f"/api/provas/{prova['id']}/classification")
+    ).json()
+    assert classification["is_provisional"] is False
+    assert len(classification["standings"]) == 2
+    assert all(
+        entry["race_time_ms"] is not None
+        for entry in classification["standings"]
+    )

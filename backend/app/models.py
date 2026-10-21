@@ -33,10 +33,55 @@ class Event(Base):
         back_populates="event",
         cascade="all, delete-orphan",
     )
+    provas: Mapped[list["Prova"]] = relationship(
+        back_populates="event",
+        cascade="all, delete-orphan",
+        order_by="Prova.order_num",
+    )
     heats: Mapped[list["Heat"]] = relationship(
         back_populates="event",
         cascade="all, delete-orphan",
         order_by="Heat.order_num",
+    )
+
+
+class Prova(Base):
+    """Agrupa varias baterias sob a mesma prova (ex.: 100m livres masculino)."""
+
+    __tablename__ = "prova"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    event_id: Mapped[str] = mapped_column(
+        ForeignKey("event.id"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String, nullable=False)
+    order_num: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    stroke: Mapped[str | None] = mapped_column(String, nullable=True)
+    distance_m: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    category: Mapped[str | None] = mapped_column(String, nullable=True)
+    consolidate_results: Mapped[bool] = mapped_column(
+        Boolean, default=True, nullable=False
+    )
+    classification_criterion: Mapped[str] = mapped_column(
+        String, default="lowest_time", nullable=False
+    )
+    status: Mapped[str] = mapped_column(
+        String, default="scheduled", nullable=False
+    )
+    created_at: Mapped[float] = mapped_column(Float, nullable=False)
+
+    event: Mapped["Event"] = relationship(back_populates="provas")
+    heats: Mapped[list["Heat"]] = relationship(
+        back_populates="prova",
+        cascade="all, delete-orphan",
+        order_by="Heat.order_num",
+    )
+
+    __table_args__ = (
+        Index("ix_prova_event_order", "event_id", "order_num"),
+        UniqueConstraint(
+            "event_id", "order_num", name="uq_prova_event_order"
+        ),
     )
 
 
@@ -48,6 +93,7 @@ class Team(Base):
         ForeignKey("event.id"), nullable=False
     )
     name: Mapped[str] = mapped_column(String, nullable=False)
+    logo_url: Mapped[str | None] = mapped_column(String, nullable=True)
 
     event: Mapped["Event"] = relationship(back_populates="teams")
     lanes: Mapped[list["HeatLane"]] = relationship(back_populates="team")
@@ -59,6 +105,9 @@ class Heat(Base):
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     event_id: Mapped[str] = mapped_column(
         ForeignKey("event.id"), nullable=False
+    )
+    prova_id: Mapped[str] = mapped_column(
+        ForeignKey("prova.id"), nullable=False
     )
     name: Mapped[str] = mapped_column(String, nullable=False)
     order_num: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
@@ -74,6 +123,7 @@ class Heat(Base):
     finished_at: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     event: Mapped["Event"] = relationship(back_populates="heats")
+    prova: Mapped["Prova"] = relationship(back_populates="heats")
     lanes: Mapped[list["HeatLane"]] = relationship(
         back_populates="heat",
         cascade="all, delete-orphan",
@@ -82,6 +132,8 @@ class Heat(Base):
 
     __table_args__ = (
         Index("ix_heat_event_order", "event_id", "order_num"),
+        Index("ix_heat_prova_order", "prova_id", "order_num"),
+        UniqueConstraint("prova_id", "order_num", name="uq_heat_prova_order"),
     )
 
 

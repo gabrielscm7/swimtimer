@@ -4,6 +4,45 @@ Formato: [Semantic Versioning](https://semver.org/lang/pt-BR/)
 
 ---
 
+## [2.1.0] — 2026-10-21
+
+### Added
+- Entidade persistente `Prova` (`prova`): pertence a um evento, agrupa baterias e
+  guarda ordem, modalidade/estilo, distância, categoria, `consolidate_results`
+  (padrão `true`) e `classification_criterion` (padrão `lowest_time`)
+- `Heat.prova_id` obrigatório (FK + triggers no SQLite) e `Team.logo_url`
+- API: `POST/GET /api/events/{id}/provas`, `GET/PATCH/DELETE /api/provas/{id}`,
+  `POST/GET /api/provas/{id}/heats`, `GET /api/provas/{id}/classification`,
+  `PATCH /api/teams/{id}` e upload/remoção de logo da equipe
+- Classificação consolidada por menor tempo com posições de empate (1,2,2,4),
+  desempate visual determinístico e distinção entre válidos, DQ, sem tempo e
+  em andamento; classificação provisória até todas as baterias finalizarem
+- Evento WebSocket `prova_state` (scope `prova`) e recuperação de estado na
+  reconexão; `heat_state` e `ready_update` preservados
+- Logos de equipe (PNG/JPEG/WebP, validação por magic bytes, limite 1 MB,
+  armazenamento local em `backend/data/logos`, exibição 320×100 com
+  `object-fit: contain`) em gestão, público e dashboard
+- Testes de provas, classificação, migração 0003/0004, logos e concorrência
+  entre raias/provas; script `backend/tests/load_test.py` com números medidos
+  em `docs/audit/load_results.md`
+
+### Changed
+- `POST /api/events/{id}/heats` (compatibilidade) cria uma prova 1:1 por bateria;
+  o fluxo novo é `POST /api/provas/{id}/heats`
+- `order_num` de baterias é único por prova; `order_num` de provas é único por evento
+- `GET /api/events` e listagens de provas carregam raias/voltas/equipes em lote
+  (reduziu ~57 ms para ~23 ms em 160 raias no teste in-process)
+- `admin.html` foi descontinuado e redireciona para `gestao.html`/`index.html`
+- Equipe renomeada via `PATCH /api/teams/{id}` (removeu create+copiar+delete frágil)
+- `fiscal` e `supervisor` exibem a prova no seletor/lista hierárquica
+
+### Fixed
+- Exclusão de equipe em uso retorna `409 equipe_em_uso` (preserva resultados)
+- `PATCH /api/heats/{id}` agora usa lock e valida colisão de `order_num`
+- `POST /api/lanes/{id}/ready` retorna o nome da equipe corretamente
+- Dashboard ordena maratona por voltas e metros (antes só metros)
+- `formatTenths` não mostra mais décimos sempre zerados
+
 ## [Unreleased] — v2.0.1
 
 ### Fixed

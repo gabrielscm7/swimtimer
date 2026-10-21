@@ -35,4 +35,6 @@ Acesse `http://localhost:8080`
 
 ## Versão atual
 
-`v2.0.0` — Eventos + Provas (Event/Heat) com FastAPI + WebSocket + SQLite
+`v2.1.0` — Eventos → Provas → Baterias, classificação consolidada e logos
+
+Hierarquia: **Evento → Prova → Bateria → Raia/Atleta → Resultado**.

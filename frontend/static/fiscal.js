@@ -277,8 +277,20 @@ async function loadEvents() {
   }
 }
 
+function provaOfHeat(event, heat) {
+  if (!event || !event.provas || !heat) return null;
+  return event.provas.find((prova) => prova.id === heat.prova_id) || null;
+}
+
 function pickConfigHeat(event) {
-  const heats = [...event.heats].sort((a, b) => a.order_num - b.order_num);
+  const provaOrder = (heat) => {
+    const prova = provaOfHeat(event, heat);
+    return prova ? prova.order_num : 0;
+  };
+  const heats = [...event.heats].sort(
+    (a, b) =>
+      provaOrder(a) - provaOrder(b) || a.order_num - b.order_num
+  );
   return (
     heats.find((heat) => heat.status === "active") ||
     heats.find((heat) => heat.status === "ready_check") ||
@@ -330,7 +342,10 @@ function renderConfig() {
 
   const chosen = lanes.find((lane) => lane.id === selectedLaneId);
   if (chosen && chosen.participant_name) {
-    els.fsPreview.textContent = `${chosen.participant_name} · ${chosen.team || "sem equipe"}`;
+    const prova = provaOfHeat(configEvent, configHeat);
+    els.fsPreview.textContent = `${
+      prova ? prova.name + " · " : ""
+    }${configHeat.name} · ${chosen.participant_name} · ${chosen.team || "sem equipe"}`;
   } else if (!lanes.length) {
     els.fsPreview.textContent = "Nenhuma raia configurada nesta bateria.";
   } else if (chosen) {

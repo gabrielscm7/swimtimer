@@ -1,10 +1,14 @@
 import atexit
 import os
+import shutil
 import tempfile
 
 _db_fd, _DB_PATH = tempfile.mkstemp(suffix=".db", prefix="swimtimer_test_")
 os.close(_db_fd)
 os.environ.setdefault("DATABASE_URL", f"sqlite+aiosqlite:///{_DB_PATH}")
+
+_LOGO_DIR = tempfile.mkdtemp(prefix="swimtimer_logos_")
+os.environ.setdefault("LOGO_DIR", _LOGO_DIR)
 
 
 @atexit.register
@@ -13,6 +17,7 @@ def _cleanup_test_db() -> None:
         os.remove(_DB_PATH)
     except OSError:
         pass
+    shutil.rmtree(_LOGO_DIR, ignore_errors=True)
 
 
 import pytest
@@ -113,6 +118,56 @@ async def create_heat(
     if order_num is not None:
         body["order_num"] = order_num
     response = await client.post(f"/api/events/{event_id}/heats", json=body)
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
+async def create_prova(
+    client: AsyncClient,
+    event_id: str,
+    *,
+    name: str = "Prova",
+    order_num: int | None = None,
+    consolidate_results: bool = True,
+    distance_m: int | None = None,
+    stroke: str | None = None,
+    category: str | None = None,
+) -> dict:
+    body: dict = {
+        "name": name,
+        "consolidate_results": consolidate_results,
+    }
+    if order_num is not None:
+        body["order_num"] = order_num
+    if distance_m is not None:
+        body["distance_m"] = distance_m
+    if stroke is not None:
+        body["stroke"] = stroke
+    if category is not None:
+        body["category"] = category
+    response = await client.post(f"/api/events/{event_id}/provas", json=body)
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
+async def create_heat_in_prova(
+    client: AsyncClient,
+    prova_id: str,
+    *,
+    name: str = "Bateria",
+    heat_type: str = "bateria",
+    distance_m: int | None = 25,
+    duration_s: int | None = None,
+    order_num: int | None = None,
+) -> dict:
+    body: dict = {"name": name, "heat_type": heat_type}
+    if distance_m is not None:
+        body["distance_m"] = distance_m
+    if duration_s is not None:
+        body["duration_s"] = duration_s
+    if order_num is not None:
+        body["order_num"] = order_num
+    response = await client.post(f"/api/provas/{prova_id}/heats", json=body)
     assert response.status_code == 201, response.text
     return response.json()
 

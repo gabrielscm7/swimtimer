@@ -30,12 +30,20 @@ class Settings(BaseSettings):
     HOST: str = "0.0.0.0"
     PORT: int = 8080
     FRONTEND_DIR: str = ""
+    LOGO_DIR: str = ""
+    MAX_LOGO_BYTES: int = 1_048_576
 
     @property
     def frontend_dir(self) -> Path:
         if self.FRONTEND_DIR:
             return Path(self.FRONTEND_DIR)
         return _resolve_frontend_dir()
+
+    @property
+    def logo_dir(self) -> Path:
+        if self.LOGO_DIR:
+            return Path(self.LOGO_DIR)
+        return BACKEND_DIR / "data" / "logos"
 
 
 settings = Settings()

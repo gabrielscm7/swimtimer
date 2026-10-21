@@ -78,17 +78,27 @@
 
 ---
 
-## Versão 2.0 — Multi-Evento (backlog)
+## Versão 2.1 — Provas e classificação consolidada (concluída)
 
-Itens a detalhar após conclusão do v1.0:
+- [x] Entidade `Prova` (evento → prova → bateria)
+- [x] Migração 0003 (uma prova por bateria legada, sem agrupar por nome)
+- [x] Configuração por prova (`consolidate_results`, `lowest_time`)
+- [x] Classificação consolidada por menor tempo, com empates 1,2,2,4
+- [x] Distinção válido / DQ / sem tempo / em andamento + provisória/definitiva
+- [x] Evento WebSocket `prova_state` e recuperação na reconexão
+- [x] Logos de equipe (upload local, validação real, limite 1 MB)
+- [x] Gestão hierárquica, classificação na gestão/público/dashboard
+- [x] Testes de API, concorrência, migração, WebSocket e carga
 
-- Estrutura de múltiplos eventos independentes
-- Upload de balizamento (CSV)
-- Cadastro de equipes e atletas
-- Configuração visual por evento (logo, cores, banner)
-- Gestão de baterias com cálculo de voltas automático
-- Parciais e viradas para provas longas
-- Tela de programa (próximas baterias)
+## Versão 2.0 — Multi-Evento (concluída)
+
+- [x] Estrutura de múltiplos eventos independentes
+- [x] Cadastro de equipes e baterias
+- [x] Gestão de baterias
+- [ ] Upload de balizamento (CSV)
+- [ ] Cadastro individual de atletas
+- [ ] Parciais e viradas para provas longas
+- [ ] Tela de programa (próximas baterias)
 
 ---
 

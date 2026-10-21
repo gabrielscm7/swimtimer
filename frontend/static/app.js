@@ -102,7 +102,7 @@ function formatTenths(totalSeconds) {
   const value = Math.max(0, totalSeconds || 0);
   const minutes = String(Math.floor(value / 60)).padStart(2, "0");
   const seconds = String(Math.floor(value % 60)).padStart(2, "0");
-  const tenths = Math.floor((value * 10) % 10);
+  const tenths = Math.floor((value % 1) * 10);
   return `${minutes}:${seconds}.${tenths}`;
 }
 

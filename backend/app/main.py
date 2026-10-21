@@ -1,16 +1,32 @@
 import asyncio
 import time
+import uuid
 from contextlib import asynccontextmanager
+from pathlib import Path
 
-from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import (
+    Depends,
+    FastAPI,
+    File,
+    HTTPException,
+    Query,
+    UploadFile,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import delete, func, or_, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from .classification import (
+    build_classification,
+    prova_status,
+)
 from .config import settings
 from .database import AsyncSessionLocal, engine, get_db, init_db
-from .models import Event, Heat, HeatLane, LapEvent, Team
+from .models import Event, Heat, HeatLane, LapEvent, Prova, Team
 from .schemas import (
     EventCreate,
     EventUpdate,
@@ -18,7 +34,10 @@ from .schemas import (
     HeatUpdate,
     HeatLaneConfigRequest,
     LaneUpdate,
+    ProvaCreate,
+    ProvaUpdate,
     TeamCreate,
+    TeamUpdate,
     compute_speed,
     format_race_time,
 )
@@ -53,6 +72,7 @@ async def _heat_guard(heat_id: str):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    settings.logo_dir.mkdir(parents=True, exist_ok=True)
     await init_db()
     yield
     await engine.dispose()
@@ -86,6 +106,13 @@ async def _get_heat(session: AsyncSession, heat_id: str) -> Heat:
     return heat
 
 
+async def _get_prova(session: AsyncSession, prova_id: str) -> Prova:
+    prova = await session.get(Prova, prova_id)
+    if prova is None:
+        raise HTTPException(status_code=404, detail="prova_nao_encontrada")
+    return prova
+
+
 async def _get_lane(session: AsyncSession, lane_id: str) -> HeatLane:
     lane = await session.get(HeatLane, lane_id)
     if lane is None:
@@ -93,9 +120,21 @@ async def _get_lane(session: AsyncSession, lane_id: str) -> HeatLane:
     return lane
 
 
-async def _team_names(session: AsyncSession, event_id: str) -> dict[str, str]:
+async def _team_map(session: AsyncSession, event_id: str) -> dict[str, dict]:
     result = await session.execute(select(Team).where(Team.event_id == event_id))
-    return {team.id: team.name for team in result.scalars().all()}
+    return {
+        team.id: {"name": team.name, "logo_url": team.logo_url}
+        for team in result.scalars().all()
+    }
+
+
+def _team_dict(team: Team) -> dict:
+    return {
+        "id": team.id,
+        "event_id": team.event_id,
+        "name": team.name,
+        "logo_url": team.logo_url,
+    }
 
 
 def _lane_dict(
@@ -104,6 +143,7 @@ def _lane_dict(
     heat: Heat,
     pool_length_m: int,
     team_name: str | None,
+    team_logo_url: str | None = None,
     laps: int = 0,
     last_lap_at: float | None = None,
 ) -> dict:
@@ -114,6 +154,7 @@ def _lane_dict(
         "participant_name": lane.participant_name,
         "team_id": lane.team_id,
         "team": team_name,
+        "team_logo_url": team_logo_url,
         "status": lane.status,
         "finish_at": lane.finish_at,
         "race_time_ms": lane.race_time_ms,
@@ -125,18 +166,40 @@ def _lane_dict(
     }
 
 
-async def _heat_payload(session: AsyncSession, heat: Heat) -> dict:
-    event = await session.get(Event, heat.event_id)
-    pool_length_m = event.pool_length_m if event else 0
-    team_map = await _team_names(session, heat.event_id)
+async def _heats_payload(
+    session: AsyncSession, heats: list[Heat]
+) -> list[dict]:
+    """Carrega raias, voltas e equipes de varias baterias em lote."""
+    if not heats:
+        return []
+
+    event_ids = {heat.event_id for heat in heats}
+    result = await session.execute(
+        select(Event).where(Event.id.in_(event_ids))
+    )
+    events = {event.id: event for event in result.scalars().all()}
 
     result = await session.execute(
-        select(HeatLane)
-        .where(HeatLane.heat_id == heat.id)
-        .order_by(HeatLane.lane_number)
+        select(Team).where(Team.event_id.in_(event_ids))
     )
-    lanes = result.scalars().all()
-    lane_ids = [lane.id for lane in lanes]
+    teams_by_event: dict[str, dict[str, dict]] = {}
+    for team in result.scalars().all():
+        teams_by_event.setdefault(team.event_id, {})[team.id] = {
+            "name": team.name,
+            "logo_url": team.logo_url,
+        }
+
+    heat_ids = [heat.id for heat in heats]
+    result = await session.execute(
+        select(HeatLane)
+        .where(HeatLane.heat_id.in_(heat_ids))
+        .order_by(HeatLane.heat_id, HeatLane.lane_number)
+    )
+    lanes_by_heat: dict[str, list[HeatLane]] = {}
+    lane_ids: list[str] = []
+    for lane in result.scalars().all():
+        lanes_by_heat.setdefault(lane.heat_id, []).append(lane)
+        lane_ids.append(lane.id)
 
     lap_counts: dict[str, int] = {}
     last_laps: dict[str, float] = {}
@@ -155,38 +218,206 @@ async def _heat_payload(session: AsyncSession, heat: Heat) -> dict:
             if last is not None:
                 last_laps[lane_id] = last
 
+    payloads: list[dict] = []
+    for heat in heats:
+        event = events.get(heat.event_id)
+        pool_length_m = event.pool_length_m if event else 0
+        team_map = teams_by_event.get(heat.event_id, {})
+        lanes = lanes_by_heat.get(heat.id, [])
+        payloads.append(
+            {
+                "id": heat.id,
+                "event_id": heat.event_id,
+                "prova_id": heat.prova_id,
+                "name": heat.name,
+                "order_num": heat.order_num,
+                "heat_type": heat.heat_type,
+                "distance_m": heat.distance_m,
+                "duration_s": heat.duration_s,
+                "status": heat.status,
+                "started_at": heat.started_at,
+                "finished_at": heat.finished_at,
+                "heat_lanes": [
+                    _lane_dict(
+                        lane,
+                        heat=heat,
+                        pool_length_m=pool_length_m,
+                        team_name=(team_map.get(lane.team_id) or {}).get("name")
+                        if lane.team_id
+                        else None,
+                        team_logo_url=(
+                            team_map.get(lane.team_id) or {}
+                        ).get("logo_url")
+                        if lane.team_id
+                        else None,
+                        laps=lap_counts.get(lane.id, 0),
+                        last_lap_at=last_laps.get(lane.id),
+                    )
+                    for lane in lanes
+                ],
+            }
+        )
+    return payloads
+
+
+async def _heat_payload(session: AsyncSession, heat: Heat) -> dict:
+    payloads = await _heats_payload(session, [heat])
+    return payloads[0]
+
+
+async def _prova_heats(session: AsyncSession, prova_id: str) -> list[Heat]:
+    result = await session.execute(
+        select(Heat)
+        .where(Heat.prova_id == prova_id)
+        .order_by(Heat.order_num)
+    )
+    return list(result.scalars().all())
+
+
+async def _provas_payload(
+    session: AsyncSession,
+    provas: list[Prova],
+    *,
+    include_heats: bool = True,
+) -> list[dict]:
+    if not provas:
+        return []
+    event_id = provas[0].event_id
+    result = await session.execute(
+        select(Heat)
+        .where(Heat.event_id == event_id)
+        .order_by(Heat.order_num)
+    )
+    heats = list(result.scalars().all())
+    heat_payloads = await _heats_payload(session, heats) if include_heats else []
+    payload_by_heat = {payload["id"]: payload for payload in heat_payloads}
+    heats_by_prova: dict[str, list[Heat]] = {}
+    for heat in heats:
+        heats_by_prova.setdefault(heat.prova_id, []).append(heat)
+
+    payloads = []
+    for prova in provas:
+        prova_heats = sorted(
+            heats_by_prova.get(prova.id, []),
+            key=lambda heat: heat.order_num,
+        )
+        payloads.append(
+            {
+                "id": prova.id,
+                "event_id": prova.event_id,
+                "name": prova.name,
+                "order_num": prova.order_num,
+                "stroke": prova.stroke,
+                "distance_m": prova.distance_m,
+                "category": prova.category,
+                "consolidate_results": prova.consolidate_results,
+                "classification_criterion": prova.classification_criterion,
+                "status": prova_status([heat.status for heat in prova_heats]),
+                "created_at": prova.created_at,
+                "heat_count": len(prova_heats),
+                "heat_orders": [heat.order_num for heat in prova_heats],
+                "heats": [
+                    payload_by_heat[heat.id]
+                    for heat in prova_heats
+                    if heat.id in payload_by_heat
+                ],
+            }
+        )
+    return payloads
+
+
+async def _prova_payload(
+    session: AsyncSession, prova: Prova, *, include_heats: bool = True
+) -> dict:
+    payloads = await _provas_payload(
+        session, [prova], include_heats=include_heats
+    )
+    return payloads[0]
+
+
+async def _classification_payload(
+    session: AsyncSession, prova: Prova
+) -> dict:
+    heats = await _prova_heats(session, prova.id)
+    heat_ids = [heat.id for heat in heats]
+    lane_map: dict[str, list[HeatLane]] = {heat_id: [] for heat_id in heat_ids}
+    if heat_ids:
+        result = await session.execute(
+            select(HeatLane)
+            .where(HeatLane.heat_id.in_(heat_ids))
+            .order_by(HeatLane.lane_number)
+        )
+        for lane in result.scalars().all():
+            lane_map[lane.heat_id].append(lane)
+
+    event = await session.get(Event, prova.event_id)
+    team_map = await _team_map(session, prova.event_id)
+    heat_dicts = [
+        {
+            "id": heat.id,
+            "name": heat.name,
+            "order_num": heat.order_num,
+            "status": heat.status,
+            "distance_m": heat.distance_m,
+            "lanes": [
+                {
+                    "id": lane.id,
+                    "lane_number": lane.lane_number,
+                    "participant_name": lane.participant_name,
+                    "team_id": lane.team_id,
+                    "status": lane.status,
+                    "race_time_ms": lane.race_time_ms,
+                }
+                for lane in lane_map.get(heat.id, [])
+            ],
+        }
+        for heat in heats
+    ]
+    classification = build_classification(
+        consolidate_results=prova.consolidate_results,
+        heats=heat_dicts,
+        team_map=team_map,
+        pool_distance_m=event.pool_length_m if event else None,
+    )
     return {
-        "id": heat.id,
-        "event_id": heat.event_id,
-        "name": heat.name,
-        "order_num": heat.order_num,
-        "heat_type": heat.heat_type,
-        "distance_m": heat.distance_m,
-        "duration_s": heat.duration_s,
-        "status": heat.status,
-        "started_at": heat.started_at,
-        "finished_at": heat.finished_at,
-        "heat_lanes": [
-            _lane_dict(
-                lane,
-                heat=heat,
-                pool_length_m=pool_length_m,
-                team_name=team_map.get(lane.team_id) if lane.team_id else None,
-                laps=lap_counts.get(lane.id, 0),
-                last_lap_at=last_laps.get(lane.id),
-            )
-            for lane in lanes
-        ],
+        "prova_id": prova.id,
+        "name": prova.name,
+        "status": classification["status"],
+        "consolidate_results": prova.consolidate_results,
+        "classification_criterion": prova.classification_criterion,
+        "is_provisional": classification["is_provisional"],
+        "standings": classification["standings"],
+        "excluded": classification["excluded"],
+        "battery_results": classification["battery_results"],
     }
+
+
+async def _sync_prova_status(session: AsyncSession, prova_id: str) -> None:
+    prova = await session.get(Prova, prova_id)
+    if prova is None:
+        return
+    result = await session.execute(
+        select(Heat.status).where(Heat.prova_id == prova_id)
+    )
+    prova.status = prova_status(list(result.scalars().all()))
 
 
 async def _event_payload(
     session: AsyncSession, event: Event, *, include_teams: bool = False
 ) -> dict:
     result = await session.execute(
-        select(Heat).where(Heat.event_id == event.id).order_by(Heat.order_num)
+        select(Heat)
+        .join(Prova, Heat.prova_id == Prova.id)
+        .where(Heat.event_id == event.id)
+        .order_by(Prova.order_num, Heat.order_num)
     )
     heats = result.scalars().all()
+    result = await session.execute(
+        select(Prova)
+        .where(Prova.event_id == event.id)
+        .order_by(Prova.order_num)
+    )
+    provas = result.scalars().all()
     payload = {
         "id": event.id,
         "name": event.name,
@@ -195,15 +426,32 @@ async def _event_payload(
         "pool_length_m": event.pool_length_m,
         "status": event.status,
         "created_at": event.created_at,
-        "heats": [await _heat_payload(session, heat) for heat in heats],
+        "provas": [
+            {
+                "id": prova.id,
+                "event_id": prova.event_id,
+                "name": prova.name,
+                "order_num": prova.order_num,
+                "stroke": prova.stroke,
+                "distance_m": prova.distance_m,
+                "category": prova.category,
+                "consolidate_results": prova.consolidate_results,
+                "classification_criterion": prova.classification_criterion,
+                "status": prova.status,
+                "heat_count": sum(
+                    1 for heat in heats if heat.prova_id == prova.id
+                ),
+            }
+            for prova in provas
+        ],
+        "heats": await _heats_payload(session, heats),
     }
     if include_teams:
         result = await session.execute(
             select(Team).where(Team.event_id == event.id).order_by(Team.name)
         )
         payload["teams"] = [
-            {"id": team.id, "event_id": team.event_id, "name": team.name}
-            for team in result.scalars().all()
+            _team_dict(team) for team in result.scalars().all()
         ]
     return payload
 
@@ -250,6 +498,15 @@ def _ready_update_message(heat_id: str, ready_payload: dict) -> dict:
     }
 
 
+def _prova_state_message(prova_payload: dict) -> dict:
+    return {
+        "type": "prova_state",
+        "scope": "prova",
+        "prova_id": prova_payload["id"],
+        "payload": prova_payload,
+    }
+
+
 async def _active_heat_count(session: AsyncSession) -> int:
     result = await session.execute(
         select(func.count())
@@ -277,6 +534,11 @@ async def _broadcast_server_status() -> None:
 
 async def _broadcast_heat(session: AsyncSession, heat: Heat) -> None:
     await manager.broadcast(_heat_state_message(await _heat_payload(session, heat)))
+    prova = await session.get(Prova, heat.prova_id)
+    if prova is not None:
+        await manager.broadcast(
+            _prova_state_message(await _prova_payload(session, prova))
+        )
 
 
 async def _broadcast_ready(session: AsyncSession, heat: Heat) -> None:
@@ -288,13 +550,15 @@ async def _maybe_finish_heat(session: AsyncSession, heat: Heat) -> bool:
     await session.flush()
     lanes = await _heat_lanes(session, heat.id)
     participants = _participant_lanes(lanes)
+    finished = False
     if participants and all(
         lane.status in ("finished", "dq") for lane in participants
     ):
         heat.status = "finished"
         heat.finished_at = time.time()
-        return True
-    return False
+        finished = True
+    await _sync_prova_status(session, heat.prova_id)
+    return finished
 
 
 # --------------------------------------------------------------------------- #
@@ -315,10 +579,15 @@ async def server_status(session: AsyncSession = Depends(get_db)) -> dict:
 
 
 @app.get("/api/events")
-async def list_events(session: AsyncSession = Depends(get_db)) -> list[dict]:
-    result = await session.execute(
-        select(Event).order_by(Event.created_at.desc())
-    )
+async def list_events(
+    limit: int | None = Query(default=None, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    session: AsyncSession = Depends(get_db),
+) -> list[dict]:
+    query = select(Event).order_by(Event.created_at.desc()).offset(offset)
+    if limit is not None:
+        query = query.limit(limit)
+    result = await session.execute(query)
     return [
         await _event_payload(session, event, include_teams=True)
         for event in result.scalars().all()
@@ -381,6 +650,7 @@ async def delete_event(
     await session.execute(delete(LapEvent).where(LapEvent.lane_id.in_(lane_ids)))
     await session.execute(delete(HeatLane).where(HeatLane.heat_id.in_(heat_ids)))
     await session.execute(delete(Heat).where(Heat.event_id == event_id))
+    await session.execute(delete(Prova).where(Prova.event_id == event_id))
     await session.execute(delete(Team).where(Team.event_id == event_id))
     await session.delete(event)
     await session.commit()
@@ -401,7 +671,7 @@ async def create_team(
     session.add(team)
     await session.commit()
     await session.refresh(team)
-    return {"id": team.id, "event_id": team.event_id, "name": team.name}
+    return _team_dict(team)
 
 
 @app.get("/api/events/{event_id}/teams")
@@ -413,10 +683,112 @@ async def list_teams(
     result = await session.execute(
         select(Team).where(Team.event_id == event_id).order_by(Team.name)
     )
-    return [
-        {"id": team.id, "event_id": team.event_id, "name": team.name}
-        for team in result.scalars().all()
-    ]
+    return [_team_dict(team) for team in result.scalars().all()]
+
+
+@app.patch("/api/teams/{team_id}")
+async def update_team(
+    team_id: str,
+    payload: TeamUpdate,
+    session: AsyncSession = Depends(get_db),
+) -> dict:
+    team = await session.get(Team, team_id)
+    if team is None:
+        raise HTTPException(status_code=404, detail="equipe_nao_encontrada")
+    for field, value in payload.model_dump(exclude_unset=True).items():
+        setattr(team, field, value)
+    await session.commit()
+    await session.refresh(team)
+    return _team_dict(team)
+
+
+def _sniff_image(data: bytes) -> tuple[str, str] | None:
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "png", "image/png"
+    if data.startswith(b"\xff\xd8\xff"):
+        return "jpg", "image/jpeg"
+    if (
+        len(data) >= 12
+        and data[:4] == b"RIFF"
+        and data[8:12] == b"WEBP"
+    ):
+        return "webp", "image/webp"
+    return None
+
+
+def _logo_path_from_url(url: str | None) -> Path | None:
+    if not url or not url.startswith("/logos/"):
+        return None
+    name = url[len("/logos/"):]
+    if "/" in name or "\\" in name or name in ("", ".", ".."):
+        return None
+    return settings.logo_dir / name
+
+
+def _remove_logo_file(url: str | None) -> None:
+    path = _logo_path_from_url(url)
+    if path is None:
+        return
+    try:
+        if path.parent == settings.logo_dir:
+            path.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+@app.post("/api/teams/{team_id}/logo")
+async def upload_team_logo(
+    team_id: str,
+    file: UploadFile = File(...),
+    session: AsyncSession = Depends(get_db),
+) -> dict:
+    team = await session.get(Team, team_id)
+    if team is None:
+        raise HTTPException(status_code=404, detail="equipe_nao_encontrada")
+
+    data = await file.read(settings.MAX_LOGO_BYTES + 1)
+    if len(data) > settings.MAX_LOGO_BYTES:
+        raise HTTPException(status_code=413, detail="arquivo_muito_grande")
+    if not data:
+        raise HTTPException(status_code=400, detail="arquivo_vazio")
+    signature = _sniff_image(data)
+    if signature is None:
+        raise HTTPException(status_code=415, detail="formato_invalido")
+    extension, _mime = signature
+
+    settings.logo_dir.mkdir(parents=True, exist_ok=True)
+    filename = f"{uuid.uuid4()}.{extension}"
+    destination = settings.logo_dir / filename
+    destination.write_bytes(data)
+
+    old_url = team.logo_url
+    team.logo_url = f"/logos/{filename}"
+    try:
+        await session.commit()
+    except Exception:
+        await session.rollback()
+        destination.unlink(missing_ok=True)
+        raise
+    await session.refresh(team)
+    if old_url != team.logo_url:
+        _remove_logo_file(old_url)
+    return _team_dict(team)
+
+
+@app.delete("/api/teams/{team_id}/logo")
+async def delete_team_logo(
+    team_id: str,
+    session: AsyncSession = Depends(get_db),
+) -> dict:
+    team = await session.get(Team, team_id)
+    if team is None:
+        raise HTTPException(status_code=404, detail="equipe_nao_encontrada")
+    old_url = team.logo_url
+    team.logo_url = None
+    await session.commit()
+    await session.refresh(team)
+    _remove_logo_file(old_url)
+    return _team_dict(team)
 
 
 @app.delete("/api/teams/{team_id}", status_code=204)
@@ -427,21 +799,197 @@ async def delete_team(
     team = await session.get(Team, team_id)
     if team is None:
         raise HTTPException(status_code=404, detail="equipe_nao_encontrada")
-    await session.execute(
-        update(HeatLane)
+    usage = await session.scalar(
+        select(func.count())
+        .select_from(HeatLane)
         .where(HeatLane.team_id == team_id)
-        .values(team_id=None)
     )
+    if usage:
+        raise HTTPException(status_code=409, detail="equipe_em_uso")
     await session.delete(team)
     await session.commit()
 
 
 # --------------------------------------------------------------------------- #
-# Provas (heats)
+# Provas
 # --------------------------------------------------------------------------- #
-@app.post("/api/events/{event_id}/heats", status_code=201)
-async def create_heat(
+async def _next_prova_order(session: AsyncSession, event_id: str) -> int:
+    result = await session.execute(
+        select(func.max(Prova.order_num)).where(Prova.event_id == event_id)
+    )
+    return int(result.scalar_one() or 0) + 1
+
+
+async def _create_prova_record(
+    session: AsyncSession, event_id: str, payload: ProvaCreate
+) -> Prova:
+    if payload.order_num is not None:
+        order_num = payload.order_num
+        result = await session.execute(
+            select(Prova.id).where(
+                Prova.event_id == event_id, Prova.order_num == order_num
+            )
+        )
+        if result.first() is not None:
+            raise HTTPException(status_code=400, detail="order_num_duplicado")
+    else:
+        order_num = await _next_prova_order(session, event_id)
+
+    prova = Prova(
+        event_id=event_id,
+        name=payload.name,
+        order_num=order_num,
+        stroke=payload.stroke,
+        distance_m=payload.distance_m,
+        category=payload.category,
+        consolidate_results=payload.consolidate_results,
+        classification_criterion=payload.classification_criterion,
+        status="scheduled",
+        created_at=time.time(),
+    )
+    session.add(prova)
+    return prova
+
+
+@app.post("/api/events/{event_id}/provas", status_code=201)
+async def create_prova(
     event_id: str,
+    payload: ProvaCreate,
+    session: AsyncSession = Depends(get_db),
+) -> dict:
+    async with _heat_guard(f"event:{event_id}"):
+        session.expire_all()
+        await _get_event(session, event_id)
+        prova = await _create_prova_record(session, event_id, payload)
+        try:
+            await session.commit()
+        except IntegrityError:
+            await session.rollback()
+            raise HTTPException(status_code=400, detail="order_num_duplicado")
+        await session.refresh(prova)
+    await _broadcast_server_status()
+    return await _prova_payload(session, prova)
+
+
+@app.get("/api/events/{event_id}/provas")
+async def list_provas(
+    event_id: str,
+    session: AsyncSession = Depends(get_db),
+) -> list[dict]:
+    await _get_event(session, event_id)
+    result = await session.execute(
+        select(Prova)
+        .where(Prova.event_id == event_id)
+        .order_by(Prova.order_num)
+    )
+    return await _provas_payload(
+        session, list(result.scalars().all()), include_heats=True
+    )
+
+
+@app.get("/api/provas/{prova_id}")
+async def get_prova(
+    prova_id: str,
+    session: AsyncSession = Depends(get_db),
+) -> dict:
+    prova = await _get_prova(session, prova_id)
+    return await _prova_payload(session, prova)
+
+
+@app.patch("/api/provas/{prova_id}")
+async def update_prova(
+    prova_id: str,
+    payload: ProvaUpdate,
+    session: AsyncSession = Depends(get_db),
+) -> dict:
+    prova = await _get_prova(session, prova_id)
+    async with _heat_guard(f"event:{prova.event_id}"):
+        session.expire_all()
+        prova = await _get_prova(session, prova_id)
+        heats = await _prova_heats(session, prova.id)
+        started = any(heat.status != "scheduled" for heat in heats)
+        data = payload.model_dump(exclude_unset=True)
+        operational = {
+            "order_num",
+            "consolidate_results",
+            "classification_criterion",
+            "distance_m",
+        }
+        if started and operational & set(data):
+            raise HTTPException(status_code=409, detail="prova_ja_iniciada")
+
+        new_order = data.get("order_num")
+        if new_order is not None and new_order != prova.order_num:
+            result = await session.execute(
+                select(Prova.id).where(
+                    Prova.event_id == prova.event_id,
+                    Prova.order_num == new_order,
+                    Prova.id != prova.id,
+                )
+            )
+            if result.first() is not None:
+                raise HTTPException(
+                    status_code=400, detail="order_num_duplicado"
+                )
+        for field, value in data.items():
+            setattr(prova, field, value)
+        try:
+            await session.commit()
+        except IntegrityError:
+            await session.rollback()
+            raise HTTPException(status_code=400, detail="order_num_duplicado")
+        await session.refresh(prova)
+        await _sync_prova_status(session, prova.id)
+        await session.commit()
+        await session.refresh(prova)
+        payload_out = await _prova_payload(session, prova)
+    await manager.broadcast(_prova_state_message(payload_out))
+    return payload_out
+
+
+@app.delete("/api/provas/{prova_id}", status_code=204)
+async def delete_prova(
+    prova_id: str,
+    session: AsyncSession = Depends(get_db),
+) -> None:
+    prova = await _get_prova(session, prova_id)
+    async with _heat_guard(f"event:{prova.event_id}"):
+        session.expire_all()
+        prova = await _get_prova(session, prova_id)
+        heats = await _prova_heats(session, prova.id)
+        if any(heat.status != "scheduled" for heat in heats):
+            raise HTTPException(
+                status_code=409, detail="prova_possui_baterias_iniciadas"
+            )
+        heat_ids = [heat.id for heat in heats]
+        if heat_ids:
+            lane_ids = select(HeatLane.id).where(
+                HeatLane.heat_id.in_(heat_ids)
+            )
+            await session.execute(
+                delete(LapEvent).where(LapEvent.lane_id.in_(lane_ids))
+            )
+            await session.execute(
+                delete(HeatLane).where(HeatLane.heat_id.in_(heat_ids))
+            )
+            await session.execute(delete(Heat).where(Heat.id.in_(heat_ids)))
+        await session.delete(prova)
+        await session.commit()
+    await _broadcast_server_status()
+
+
+@app.get("/api/provas/{prova_id}/classification")
+async def get_prova_classification(
+    prova_id: str,
+    session: AsyncSession = Depends(get_db),
+) -> dict:
+    prova = await _get_prova(session, prova_id)
+    return await _classification_payload(session, prova)
+
+
+@app.post("/api/provas/{prova_id}/heats", status_code=201)
+async def create_heat_in_prova(
+    prova_id: str,
     payload: HeatCreate,
     session: AsyncSession = Depends(get_db),
 ) -> dict:
@@ -450,14 +998,15 @@ async def create_heat(
     if payload.heat_type == "maratona" and payload.duration_s is None:
         raise HTTPException(status_code=400, detail="duration_s_obrigatorio")
 
-    async with _heat_guard(f"event:{event_id}"):
+    async with _heat_guard(f"prova:{prova_id}"):
         session.expire_all()
-        await _get_event(session, event_id)
+        prova = await _get_prova(session, prova_id)
         if payload.order_num is not None:
             order_num = payload.order_num
             result = await session.execute(
                 select(Heat.id).where(
-                    Heat.event_id == event_id, Heat.order_num == order_num
+                    Heat.prova_id == prova_id,
+                    Heat.order_num == order_num,
                 )
             )
             if result.first() is not None:
@@ -466,13 +1015,15 @@ async def create_heat(
                 )
         else:
             result = await session.execute(
-                select(func.max(Heat.order_num)).where(Heat.event_id == event_id)
+                select(func.max(Heat.order_num)).where(
+                    Heat.prova_id == prova_id
+                )
             )
-            current = result.scalar_one()
-            order_num = (current or 0) + 1
+            order_num = int(result.scalar_one() or 0) + 1
 
         heat = Heat(
-            event_id=event_id,
+            event_id=prova.event_id,
+            prova_id=prova_id,
             name=payload.name,
             order_num=order_num,
             heat_type=payload.heat_type,
@@ -481,10 +1032,84 @@ async def create_heat(
             status="scheduled",
         )
         session.add(heat)
-        await session.commit()
+        await _sync_prova_status(session, prova_id)
+        try:
+            await session.commit()
+        except IntegrityError:
+            await session.rollback()
+            raise HTTPException(status_code=400, detail="order_num_duplicado")
+        await session.refresh(heat)
+        await session.refresh(prova)
+
+    await _broadcast_server_status()
+    await manager.broadcast(
+        _prova_state_message(await _prova_payload(session, prova))
+    )
+    return await _heat_payload(session, heat)
+
+
+@app.get("/api/provas/{prova_id}/heats")
+async def list_heats_in_prova(
+    prova_id: str,
+    session: AsyncSession = Depends(get_db),
+) -> list[dict]:
+    await _get_prova(session, prova_id)
+    heats = await _prova_heats(session, prova_id)
+    return [await _heat_payload(session, heat) for heat in heats]
+
+
+# --------------------------------------------------------------------------- #
+# Baterias (heats)
+# --------------------------------------------------------------------------- #
+@app.post("/api/events/{event_id}/heats", status_code=201)
+async def create_heat(
+    event_id: str,
+    payload: HeatCreate,
+    session: AsyncSession = Depends(get_db),
+) -> dict:
+    """Compatibilidade: cria prova e bateria 1:1 (fluxo legado).
+
+    Use `POST /api/provas/{prova_id}/heats` para varias baterias na mesma prova.
+    """
+    if payload.heat_type == "bateria" and payload.distance_m is None:
+        raise HTTPException(status_code=400, detail="distance_m_obrigatorio")
+    if payload.heat_type == "maratona" and payload.duration_s is None:
+        raise HTTPException(status_code=400, detail="duration_s_obrigatorio")
+
+    async with _heat_guard(f"event:{event_id}"):
+        session.expire_all()
+        await _get_event(session, event_id)
+        prova_payload = ProvaCreate(
+            name=payload.name,
+            order_num=payload.order_num,
+            distance_m=payload.distance_m,
+        )
+        prova = await _create_prova_record(
+            session, event_id, prova_payload
+        )
+        await session.flush()
+        heat = Heat(
+            event_id=event_id,
+            prova_id=prova.id,
+            name=payload.name,
+            order_num=1,
+            heat_type=payload.heat_type,
+            distance_m=payload.distance_m,
+            duration_s=payload.duration_s,
+            status="scheduled",
+        )
+        session.add(heat)
+        try:
+            await session.commit()
+        except IntegrityError:
+            await session.rollback()
+            raise HTTPException(status_code=400, detail="order_num_duplicado")
         await session.refresh(heat)
 
     await _broadcast_server_status()
+    await manager.broadcast(
+        _prova_state_message(await _prova_payload(session, prova))
+    )
     return await _heat_payload(session, heat)
 
 
@@ -495,7 +1120,10 @@ async def list_heats(
 ) -> list[dict]:
     await _get_event(session, event_id)
     result = await session.execute(
-        select(Heat).where(Heat.event_id == event_id).order_by(Heat.order_num)
+        select(Heat)
+        .join(Prova, Heat.prova_id == Prova.id)
+        .where(Heat.event_id == event_id)
+        .order_by(Prova.order_num, Heat.order_num)
     )
     return [
         await _heat_payload(session, heat)
@@ -510,14 +1138,36 @@ async def update_heat(
     session: AsyncSession = Depends(get_db),
 ) -> dict:
     heat = await _get_heat(session, heat_id)
-    if heat.status not in ("scheduled", "ready_check"):
-        raise HTTPException(status_code=409, detail="prova_ja_iniciada")
-    for field, value in payload.model_dump(exclude_unset=True).items():
-        setattr(heat, field, value)
-    await session.commit()
-    await session.refresh(heat)
-    await _broadcast_heat(session, heat)
-    return await _heat_payload(session, heat)
+    async with _heat_guard(f"prova:{heat.prova_id}"):
+        session.expire_all()
+        heat = await _get_heat(session, heat_id)
+        if heat.status not in ("scheduled", "ready_check"):
+            raise HTTPException(status_code=409, detail="prova_ja_iniciada")
+        data = payload.model_dump(exclude_unset=True)
+        new_order = data.get("order_num")
+        if new_order is not None and new_order != heat.order_num:
+            result = await session.execute(
+                select(Heat.id).where(
+                    Heat.prova_id == heat.prova_id,
+                    Heat.order_num == new_order,
+                    Heat.id != heat.id,
+                )
+            )
+            if result.first() is not None:
+                raise HTTPException(
+                    status_code=400, detail="order_num_duplicado"
+                )
+        for field, value in data.items():
+            setattr(heat, field, value)
+        await _sync_prova_status(session, heat.prova_id)
+        try:
+            await session.commit()
+        except IntegrityError:
+            await session.rollback()
+            raise HTTPException(status_code=400, detail="order_num_duplicado")
+        await session.refresh(heat)
+        await _broadcast_heat(session, heat)
+        return await _heat_payload(session, heat)
 
 
 @app.delete("/api/heats/{heat_id}", status_code=204)
@@ -526,14 +1176,34 @@ async def delete_heat(
     session: AsyncSession = Depends(get_db),
 ) -> None:
     heat = await _get_heat(session, heat_id)
-    if heat.status != "scheduled":
-        raise HTTPException(status_code=409, detail="prova_nao_esta_scheduled")
-    lane_ids = select(HeatLane.id).where(HeatLane.heat_id == heat_id)
-    await session.execute(delete(LapEvent).where(LapEvent.lane_id.in_(lane_ids)))
-    await session.execute(delete(HeatLane).where(HeatLane.heat_id == heat_id))
-    await session.delete(heat)
-    await session.commit()
+    prova_id = heat.prova_id
+    async with _heat_guard(f"prova:{prova_id}"):
+        session.expire_all()
+        heat = await _get_heat(session, heat_id)
+        if heat.status != "scheduled":
+            raise HTTPException(
+                status_code=409, detail="prova_nao_esta_scheduled"
+            )
+        lane_ids = select(HeatLane.id).where(HeatLane.heat_id == heat_id)
+        await session.execute(
+            delete(LapEvent).where(LapEvent.lane_id.in_(lane_ids))
+        )
+        await session.execute(
+            delete(HeatLane).where(HeatLane.heat_id == heat_id)
+        )
+        await session.delete(heat)
+        await session.flush()
+        await _sync_prova_status(session, prova_id)
+        await session.commit()
+        prova = await session.get(Prova, prova_id)
+        payload_out = (
+            _prova_state_message(await _prova_payload(session, prova))
+            if prova is not None
+            else None
+        )
     await _broadcast_server_status()
+    if payload_out is not None:
+        await manager.broadcast(payload_out)
 
 
 @app.post("/api/heats/{heat_id}/open-ready-check")
@@ -547,6 +1217,7 @@ async def open_ready_check(
         if heat.status not in ("scheduled", "ready_check"):
             raise HTTPException(status_code=409, detail="prova_nao_esta_scheduled")
         heat.status = "ready_check"
+        await _sync_prova_status(session, heat.prova_id)
         await session.commit()
         await session.refresh(heat)
         await _broadcast_heat(session, heat)
@@ -587,6 +1258,7 @@ async def start_heat(
         heat.finished_at = None
         for lane in participants:
             lane.status = "active"
+        await _sync_prova_status(session, heat.prova_id)
         await session.commit()
         await session.refresh(heat)
         await _broadcast_heat(session, heat)
@@ -613,6 +1285,7 @@ async def abort_heat(
             .where(HeatLane.heat_id == heat.id, HeatLane.status == "active")
             .values(status="ready")
         )
+        await _sync_prova_status(session, heat.prova_id)
         await session.commit()
         await session.refresh(heat)
         await _broadcast_heat(session, heat)
@@ -636,6 +1309,7 @@ async def finish_heat(
             raise HTTPException(status_code=409, detail="prova_nao_iniciada")
         heat.status = "finished"
         heat.finished_at = time.time()
+        await _sync_prova_status(session, heat.prova_id)
         await session.commit()
         await session.refresh(heat)
         await _broadcast_heat(session, heat)
@@ -726,6 +1400,7 @@ async def update_lane(
             heat=heat,
             pool_length_m=event.pool_length_m if event else 0,
             team_name=team.name if team else None,
+            team_logo_url=team.logo_url if team else None,
         )
 
 
@@ -747,13 +1422,15 @@ async def lane_ready(
         await session.commit()
         await session.refresh(lane)
         event = await session.get(Event, heat.event_id)
+        team = await session.get(Team, lane.team_id) if lane.team_id else None
         await _broadcast_heat(session, heat)
         await _broadcast_ready(session, heat)
         return _lane_dict(
             lane,
             heat=heat,
             pool_length_m=event.pool_length_m if event else 0,
-            team_name=None,
+            team_name=team.name if team else None,
+            team_logo_url=team.logo_url if team else None,
         )
 
 
@@ -901,14 +1578,16 @@ async def lane_dq(
         await session.commit()
         await session.refresh(lane)
         event = await session.get(Event, heat.event_id)
+        team = await session.get(Team, lane.team_id) if lane.team_id else None
         await _broadcast_heat(session, heat)
         if all_finished:
             await _broadcast_server_status()
         return _lane_dict(
             lane,
             heat=heat,
-            pool_length_m=event.pool_length_m,
-            team_name=None,
+            pool_length_m=event.pool_length_m if event else 0,
+            team_name=team.name if team else None,
+            team_logo_url=team.logo_url if team else None,
         )
 
 
@@ -990,11 +1669,25 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                 .where(Heat.status.in_(("ready_check", "active")))
                 .order_by(Heat.order_num)
             )
-            for heat in result.scalars().all():
+            active_heats = list(result.scalars().all())
+            for heat in active_heats:
                 await manager.send_to(
                     websocket,
                     _heat_state_message(await _heat_payload(session, heat)),
                 )
+            seen_provas: set[str] = set()
+            for heat in active_heats:
+                if heat.prova_id in seen_provas:
+                    continue
+                seen_provas.add(heat.prova_id)
+                prova = await session.get(Prova, heat.prova_id)
+                if prova is not None:
+                    await manager.send_to(
+                        websocket,
+                        _prova_state_message(
+                            await _prova_payload(session, prova)
+                        ),
+                    )
         while True:
             try:
                 data = await websocket.receive_json()
@@ -1022,6 +1715,13 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
 # --------------------------------------------------------------------------- #
 # Frontend estático (montado por último para não capturar /api e /ws)
 # --------------------------------------------------------------------------- #
+settings.logo_dir.mkdir(parents=True, exist_ok=True)
+app.mount(
+    "/logos",
+    StaticFiles(directory=str(settings.logo_dir)),
+    name="logos",
+)
+
 _frontend_dir = settings.frontend_dir
 if _frontend_dir.is_dir():
     app.mount(

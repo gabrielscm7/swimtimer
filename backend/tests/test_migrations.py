@@ -105,8 +105,14 @@ def test_migration_fixes_dangling_lane_fk(tmp_path, monkeypatch):
         "VALUES ('e1', 'E', 25, 'draft', 0)"
     )
     con.execute(
-        "INSERT INTO heat (id, event_id, name, order_num, heat_type, status) "
-        "VALUES ('h1', 'e1', 'H', 1, 'maratona', 'scheduled')"
+        "INSERT INTO prova (id, event_id, name, order_num, "
+        "consolidate_results, classification_criterion, status, created_at) "
+        "VALUES ('p1', 'e1', 'P', 1, 1, 'lowest_time', 'scheduled', 0)"
+    )
+    con.execute(
+        "INSERT INTO heat (id, event_id, prova_id, name, order_num, "
+        "heat_type, status) "
+        "VALUES ('h1', 'e1', 'p1', 'H', 1, 'maratona', 'scheduled')"
     )
     con.execute(
         "INSERT INTO heat_lane (id, heat_id, lane_number, status) "

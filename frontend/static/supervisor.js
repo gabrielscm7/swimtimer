@@ -28,9 +28,27 @@ const marathonFinished = new Set();
 // --------------------------------------------------------------------------- //
 // Helpers
 // --------------------------------------------------------------------------- //
+function provasSorted() {
+  if (!eventData || !eventData.provas) return [];
+  return [...eventData.provas].sort((a, b) => a.order_num - b.order_num);
+}
+
+function provaOf(heat) {
+  if (!heat || !eventData || !eventData.provas) return null;
+  return eventData.provas.find((prova) => prova.id === heat.prova_id) || null;
+}
+
+function provaOrderOf(heat) {
+  const prova = provaOf(heat);
+  return prova ? prova.order_num : 0;
+}
+
 function sortedHeats() {
   if (!eventData) return [];
-  return [...eventData.heats].sort((a, b) => a.order_num - b.order_num);
+  return [...eventData.heats].sort(
+    (a, b) =>
+      provaOrderOf(a) - provaOrderOf(b) || a.order_num - b.order_num
+  );
 }
 
 function currentHeat() {
@@ -170,6 +188,7 @@ function modeScheduled(heat) {
   return `
     <div class="sup-card">
       <h2>Próxima bateria</h2>
+      ${provaOf(heat) ? `<div class="muted" style="margin-bottom:2px">${escapeHtml(provaOf(heat).name)}</div>` : ""}
       <div style="font-size:1.2rem;font-weight:700">${escapeHtml(heat.name)}</div>
       <div class="muted" style="margin-top:4px">${heatTypeLabel(heat)}</div>
       <div class="muted" style="margin-top:4px">${pluralize(lanes.length, "participante")} em ${pluralize(lanes.length, "raia")}</div>
@@ -316,10 +335,11 @@ function modeFinished(heat) {
 function nextHeat() {
   const heat = currentHeat();
   if (!heat) return null;
+  const ordered = sortedHeats();
+  const index = ordered.findIndex((item) => item.id === heat.id);
   return (
-    sortedHeats().find(
-      (item) => item.order_num > heat.order_num && item.status !== "finished"
-    ) || null
+    ordered.slice(index + 1).find((item) => item.status !== "finished") ||
+    null
   );
 }
 
@@ -364,8 +384,27 @@ function renderRight() {
     els.heats.innerHTML = "";
     return;
   }
-  els.heats.innerHTML = sortedHeats()
-    .map(heatCard)
+  const provas = provasSorted();
+  if (!provas.length) {
+    els.heats.innerHTML = sortedHeats().map(heatCard).join("");
+    return;
+  }
+  els.heats.innerHTML = provas
+    .map((prova) => {
+      const provaHeats = sortedHeats().filter(
+        (heat) => heat.prova_id === prova.id
+      );
+      if (!provaHeats.length) return "";
+      return `
+        <div class="sup-prova-group">
+          <div class="sup-prova-head">
+            <span>${prova.order_num}. ${escapeHtml(prova.name)}</span>
+            <span class="status-pill ${prova.status}">${statusLabel(prova.status)}</span>
+            <span class="status-pill">${pluralize(provaHeats.length, "bateria")}</span>
+          </div>
+          ${provaHeats.map(heatCard).join("")}
+        </div>`;
+    })
     .join("");
 }
 
@@ -414,7 +453,9 @@ function heatCard(heat) {
   return `
     <div class="sup-heat-card ${activeClass} ${expanded ? "" : "collapsed"}" data-heat-card="${heat.id}">
       <div class="sup-heat-header" data-heat="${heat.id}">
-        <span>${heat.order_num}. ${escapeHtml(heat.name)}</span>
+        <span>${heat.order_num}. ${escapeHtml(heat.name)}
+          ${provaOf(heat) ? `<span class="muted"> · ${escapeHtml(provaOf(heat).name)}</span>` : ""}
+        </span>
         <span class="spacer"></span>
         <span class="status-pill ${heat.status}">${statusLabel(heat.status)}</span>
         <span class="muted">${expanded ? "▾" : "▸"}</span>
@@ -592,6 +633,27 @@ const ws = new WSClient(wsUrl(), (message) => {
     }
     applyHeatPayload(message.payload);
     if (message.payload.id === currentHeatId) renderLeft();
+    renderRight();
+  } else if (message.type === "prova_state") {
+    if (eventData && eventData.provas) {
+      const index = eventData.provas.findIndex(
+        (prova) => prova.id === message.payload.id
+      );
+      const summary = {
+        id: message.payload.id,
+        event_id: message.payload.event_id,
+        name: message.payload.name,
+        order_num: message.payload.order_num,
+        stroke: message.payload.stroke,
+        distance_m: message.payload.distance_m,
+        category: message.payload.category,
+        consolidate_results: message.payload.consolidate_results,
+        classification_criterion: message.payload.classification_criterion,
+        status: message.payload.status,
+      };
+      if (index >= 0) eventData.provas[index] = summary;
+      else eventData.provas.push(summary);
+    }
     renderRight();
   } else if (message.type === "server_status") {
     connected = message.payload.connected;

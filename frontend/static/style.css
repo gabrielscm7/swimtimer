@@ -935,3 +935,140 @@ button.error {
     padding: 24px;
   }
 }
+
+/* ------------------------------------------------------------------ */
+/* Provas / classificação / logos                                      */
+/* ------------------------------------------------------------------ */
+.prova-card {
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--panel-2);
+  margin-bottom: 16px;
+  overflow: hidden;
+}
+
+.prova-card.dragging {
+  opacity: 0.55;
+}
+
+.prova-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px;
+  flex-wrap: wrap;
+}
+
+.prova-title {
+  cursor: pointer;
+  font-size: 1.02rem;
+}
+
+.prova-body {
+  padding: 0 14px 14px;
+  border-top: 1px solid var(--border);
+}
+
+.prova-card.collapsed .prova-body {
+  display: none;
+}
+
+.classification-panel {
+  background: var(--row-bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px;
+  margin: 12px 0;
+}
+
+.classification-panel h3 {
+  margin: 0 0 10px;
+  font-size: 1rem;
+}
+
+.classification-battery {
+  margin-bottom: 16px;
+}
+
+.classification-battery h3 {
+  font-size: 0.92rem;
+  color: var(--muted);
+}
+
+.classification-panel .pos,
+.classification-panel .time {
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+}
+
+.team-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.team-logo {
+  object-fit: contain;
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 6px;
+  padding: 2px;
+}
+
+.team-logo.medium {
+  max-width: 96px;
+  max-height: 40px;
+}
+
+.team-logo.small {
+  max-width: 48px;
+  max-height: 24px;
+}
+
+.team-item {
+  flex-wrap: wrap;
+}
+
+.file-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 0.85rem;
+  color: var(--text);
+  background: var(--panel-2);
+}
+
+.file-btn:hover {
+  background: #262b38;
+}
+
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 8px 0 14px;
+  color: var(--text);
+  font-size: 0.92rem;
+}
+
+.checkbox-row input {
+  width: auto;
+}
+
+.sup-prova-group {
+  margin-bottom: 16px;
+}
+
+.sup-prova-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 8px 4px;
+  font-weight: 700;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 8px;
+}

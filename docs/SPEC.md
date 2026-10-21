@@ -1,7 +1,7 @@
-# SPEC — SwimTimer v1.0
-**Versão:** 1.0  
-**Data:** 2026-09-30  
-**Status:** Rascunho para revisão
+# SPEC — SwimTimer v2.1
+**Versão:** 2.1  
+**Data:** 2026-10-21  
+**Status:** Implementado
 
 ---
 
@@ -61,12 +61,17 @@ Event
   id, name, location, date, pool_length_m (25|50)
   status (draft|active|finished), created_at
 
-Team
-  id, event_id, name
+Prova
+  id, event_id, name, order_num, stroke, distance_m, category
+  consolidate_results (padrão true), classification_criterion (lowest_time)
+  status (scheduled|in_progress|finished), created_at
 
-Heat
-  id, event_id, name, order_num, heat_type (maratona|bateria)
-  distance_m (bateria), duration_s (maratona)
+Team
+  id, event_id, name, logo_url
+
+Heat (bateria)
+  id, event_id, prova_id, name, order_num (único por prova)
+  heat_type (maratona|bateria), distance_m, duration_s
   status (scheduled|ready_check|active|finished)
   started_at, finished_at
 
@@ -79,8 +84,10 @@ LapEvent
   id, lane_id, lap_number, recorded_at (servidor), is_undo
 ```
 
-> Um `Event` é o contêiner (várias `Heat`). Cada `Heat` é uma prova
-> individual (bateria cronometrada ou maratona) com até 8 `HeatLane`.
+> Hierarquia: **Evento → Prova → Bateria → Raia/Atleta → Resultado**.
+> Cada `Heat` (bateria) pertence a uma `Prova`; cada prova pertence a um
+> `Evento`. A referência redundante `heat.event_id` é mantida por
+> compatibilidade e eficiência, mas a autoridade é `heat.prova_id`.
 
 ### 3.2 Tabelas SQL
 
@@ -98,12 +105,29 @@ CREATE TABLE event (
 CREATE TABLE team (
     id        TEXT PRIMARY KEY,
     event_id  TEXT NOT NULL REFERENCES event(id),
-    name      TEXT NOT NULL
+    name      TEXT NOT NULL,
+    logo_url  TEXT
+);
+
+CREATE TABLE prova (
+    id                        TEXT PRIMARY KEY,
+    event_id                  TEXT NOT NULL REFERENCES event(id),
+    name                      TEXT NOT NULL,
+    order_num                 INTEGER NOT NULL,
+    stroke                    TEXT,
+    distance_m                INTEGER,
+    category                  TEXT,
+    consolidate_results       BOOLEAN NOT NULL DEFAULT 1,
+    classification_criterion  TEXT NOT NULL DEFAULT 'lowest_time',
+    status                    TEXT NOT NULL DEFAULT 'scheduled',
+    created_at                REAL NOT NULL,
+    UNIQUE (event_id, order_num)
 );
 
 CREATE TABLE heat (
     id           TEXT PRIMARY KEY,
     event_id     TEXT NOT NULL REFERENCES event(id),
+    prova_id     TEXT NOT NULL REFERENCES prova(id),
     name         TEXT NOT NULL,
     order_num    INTEGER NOT NULL,
     heat_type    TEXT NOT NULL,      -- maratona|bateria
@@ -111,7 +135,8 @@ CREATE TABLE heat (
     duration_s   INTEGER,            -- maratona
     status       TEXT DEFAULT 'scheduled',
     started_at   REAL,
-    finished_at  REAL
+    finished_at  REAL,
+    UNIQUE (prova_id, order_num)
 );
 
 CREATE TABLE heat_lane (
@@ -144,7 +169,7 @@ CREATE INDEX ix_lap_event_lane_recorded ON lap_event(lane_id, recorded_at);
 
 ### Eventos
 ```
-GET    /api/events                    → lista todos (com heats)
+GET    /api/events[?limit=&offset=]   → lista (paginável, com heats)
 POST   /api/events                    → criar evento
 GET    /api/events/{event_id}         → detalhe + heats + teams
 PATCH  /api/events/{event_id}         → atualizar
@@ -158,15 +183,38 @@ GET    /api/events/{event_id}/teams   → listar
 DELETE /api/teams/{team_id}           → deletar
 ```
 
-### Provas (heats)
+### Provas
 ```
-POST   /api/events/{event_id}/heats            → criar prova
-GET    /api/events/{event_id}/heats            → listar em ordem
-PATCH  /api/heats/{heat_id}                    → atualizar
+POST   /api/events/{event_id}/provas             → criar prova
+GET    /api/events/{event_id}/provas             → listar (com baterias)
+GET    /api/provas/{prova_id}                    → detalhe
+PATCH  /api/provas/{prova_id}                    → editar
+DELETE /api/provas/{prova_id}                    → deletar (só se todas as baterias scheduled)
+GET    /api/provas/{prova_id}/classification     → classificação consolidada
+POST   /api/provas/{prova_id}/heats              → criar bateria na prova
+GET    /api/provas/{prova_id}/heats              → listar baterias
+```
+
+### Baterias
+```
+POST   /api/events/{event_id}/heats            → compatibilidade: prova+bateria 1:1
+GET    /api/events/{event_id}/heats            → listar em ordem (prova → bateria)
+PATCH  /api/heats/{heat_id}                    → atualizar (order_num único por prova)
 DELETE /api/heats/{heat_id}                    → deletar (só se scheduled)
 POST   /api/heats/{heat_id}/open-ready-check   → status → ready_check
 POST   /api/heats/{heat_id}/start              → status → active (exige todas prontas)
 POST   /api/heats/{heat_id}/abort              → volta para scheduled
+```
+
+### Equipes / logos
+```
+POST   /api/events/{event_id}/teams   → criar equipe
+GET    /api/events/{event_id}/teams   → listar
+PATCH  /api/teams/{team_id}           → renomear
+DELETE /api/teams/{team_id}           → deletar
+POST   /api/teams/{team_id}/logo      → upload (PNG/JPEG/WebP, <= 1 MB)
+DELETE /api/teams/{team_id}/logo      → remover
+GET    /logos/{arquivo}               → arquivo estático local
 ```
 
 ### Raias
@@ -202,6 +250,15 @@ são feitas via REST; o WebSocket é usado somente para receber atualizações.
 ### Mensagens Servidor → Cliente
 
 ```jsonc
+// Estado completo de uma prova: configuração, baterias e status
+{
+  "type": "prova_state",
+  "scope": "prova",
+  "prova_id": "uuid",
+  "payload": { "id": "uuid", "name": "100m livres", "status": "in_progress",
+               "consolidate_results": true, "heats": [ /* ... */ ] }
+}
+
 // Status do servidor (conexão e mudanças de contagem)
 {
   "type": "server_status",
@@ -231,8 +288,23 @@ são feitas via REST; o WebSocket é usado somente para receber atualizações.
 }
 ```
 
-Ao conectar, o servidor envia `server_status` e, em seguida, um `heat_state`
-para cada prova em `ready_check` ou `active`.
+Ao conectar, o servidor envia `server_status`, um `heat_state` para cada
+bateria em `ready_check`/`active` e um `prova_state` para cada prova com
+bateria ativa. Clientes também reconciliam via REST após reconexão.
+
+### Classificação consolidada
+
+- Padrão por prova: `consolidate_results=true`, `classification_criterion=lowest_time`.
+- Reúne resultados válidos (`status=finished` e `race_time_ms` não nulo) de
+  todas as baterias e ordena pelo inteiro `race_time_ms` (nunca pela string).
+- Empate: mesma posição esportiva, próxima salta (1,2,2,4); a ordem visual
+  desempata por raia, nome e id, sem atribuir posição diferente.
+- DQ, sem tempo e baterias em andamento ficam fora do ranking de válidos,
+  em `excluded`, preservando o status.
+- `is_provisional=true` enquanto qualquer bateria da prova não estiver
+  `finished`; somente então a classificação é definitiva.
+- Com `consolidate_results=false`, a resposta traz `battery_results` por
+  bateria e `standings` vazio.
 
 ### Mensagens Cliente → Servidor
 Nenhuma. Registro de voltas/chegadas, prontidão e controle da prova são feitos
@@ -283,6 +355,18 @@ swimtimer/
 ```
 
 ---
+
+## 6.1. Concorrência e limites
+
+- Locks `asyncio` por bateria/prova no processo + índices únicos no SQLite
+  (`uq_heat_prova_order`, `uq_lap_event_lane_number`) como rede de segurança.
+- Finalização dupla retorna `409 ja_finalizou`; persistência ocorre antes do
+  broadcast. WS reflete somente o que foi gravado.
+- Implantação suportada: **um worker uvicorn** com SQLite WAL. Para múltiplos
+  workers seria necessário banco com escrita concorrente (PostgreSQL) ou
+  outro particionamento — ver `docs/ADR/005-concorrencia.md`.
+- `race_time_ms` é medido no servidor (instante de recebimento). Não é
+  cronometragem oficial de precisão; o sistema não faz essa alegação.
 
 ## 7. Segurança e Confiabilidade
 

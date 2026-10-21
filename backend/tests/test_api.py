@@ -6,6 +6,8 @@ from tests.conftest import (
     configure_lanes,
     create_event,
     create_heat,
+    create_heat_in_prova,
+    create_prova,
     ready_all,
     setup_bateria,
 )
@@ -234,3 +236,69 @@ async def test_create_heat_duplicate_order_num_rejected(client):
     )
     assert response.status_code == 400, response.text
     assert response.json()["detail"] == "order_num_duplicado"
+
+
+@pytest.mark.asyncio
+async def test_update_heat_duplicate_order_num_rejected(client):
+    event = await create_event(client)
+    prova = await create_prova(client, event["id"])
+    first = await create_heat_in_prova(client, prova["id"], order_num=1)
+    second = await create_heat_in_prova(client, prova["id"], order_num=2)
+
+    response = await client.patch(
+        f"/api/heats/{second['id']}", json={"order_num": 1}
+    )
+    assert response.status_code == 400, response.text
+    assert response.json()["detail"] == "order_num_duplicado"
+
+
+@pytest.mark.asyncio
+async def test_update_heat_keeps_order_num(client):
+    event = await create_event(client)
+    heat = await create_heat(client, event["id"], order_num=3)
+
+    response = await client.patch(
+        f"/api/heats/{heat['id']}", json={"order_num": 3}
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["order_num"] == 3
+
+
+@pytest.mark.asyncio
+async def test_lane_ready_returns_team_name(client):
+    event = await create_event(client)
+    team = await client.post(
+        f"/api/events/{event['id']}/teams", json={"name": "Equipe Azul"}
+    )
+    team = team.json()
+    heat = await create_heat(client, event["id"])
+    heat = await configure_lanes(client, heat["id"], [(1, "Ana")])
+    lane_id = heat["heat_lanes"][0]["id"]
+    await client.patch(f"/api/lanes/{lane_id}", json={"team_id": team["id"]})
+    await client.post(f"/api/heats/{heat['id']}/open-ready-check")
+
+    response = await client.post(f"/api/lanes/{lane_id}/ready")
+    assert response.status_code == 200, response.text
+    assert response.json()["team"] == "Equipe Azul"
+
+
+@pytest.mark.asyncio
+async def test_delete_team_blocked_when_in_use(client):
+    event = await create_event(client)
+    team = (
+        await client.post(
+            f"/api/events/{event['id']}/teams", json={"name": "Equipe"}
+        )
+    ).json()
+    heat = await create_heat(client, event["id"])
+    heat = await configure_lanes(client, heat["id"], [(1, "Ana")])
+    lane_id = heat["heat_lanes"][0]["id"]
+    await client.patch(f"/api/lanes/{lane_id}", json={"team_id": team["id"]})
+
+    blocked = await client.delete(f"/api/teams/{team['id']}")
+    assert blocked.status_code == 409, blocked.text
+    assert blocked.json()["detail"] == "equipe_em_uso"
+
+    await client.patch(f"/api/lanes/{lane_id}", json={"team_id": None})
+    deleted = await client.delete(f"/api/teams/{team['id']}")
+    assert deleted.status_code == 204, deleted.text

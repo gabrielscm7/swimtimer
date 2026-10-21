@@ -6,6 +6,7 @@ EventStatus = Literal["draft", "active", "finished"]
 HeatType = Literal["maratona", "bateria"]
 HeatStatus = Literal["scheduled", "ready_check", "active", "finished"]
 LaneStatus = Literal["assigned", "ready", "active", "finished", "dq"]
+ClassificationCriterion = Literal["lowest_time"]
 
 
 def format_race_time(race_time_ms: int | None) -> str | None:
@@ -74,10 +75,84 @@ class EventDetailResponse(EventResponse):
 
 
 # --------------------------------------------------------------------------- #
+# Prova
+# --------------------------------------------------------------------------- #
+class ProvaCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    order_num: Optional[int] = Field(default=None, ge=1)
+    stroke: Optional[str] = Field(default=None, max_length=60)
+    distance_m: Optional[int] = Field(default=None, gt=0)
+    category: Optional[str] = Field(default=None, max_length=60)
+    consolidate_results: bool = True
+    classification_criterion: ClassificationCriterion = "lowest_time"
+
+
+class ProvaUpdate(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    order_num: Optional[int] = Field(default=None, ge=1)
+    stroke: Optional[str] = Field(default=None, max_length=60)
+    distance_m: Optional[int] = Field(default=None, gt=0)
+    category: Optional[str] = Field(default=None, max_length=60)
+    consolidate_results: Optional[bool] = None
+    classification_criterion: Optional[ClassificationCriterion] = None
+
+
+class ProvaResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    event_id: str
+    name: str
+    order_num: int
+    stroke: str | None = None
+    distance_m: int | None = None
+    category: str | None = None
+    consolidate_results: bool = True
+    classification_criterion: str = "lowest_time"
+    status: str
+    created_at: float
+    heats: list["HeatResponse"] = Field(default_factory=list)
+
+
+class ClassificationEntry(BaseModel):
+    position: int | None = None
+    lane_id: str
+    heat_id: str
+    heat_name: str
+    heat_order_num: int
+    lane_number: int
+    participant_name: str | None = None
+    team_id: str | None = None
+    team_name: str | None = None
+    team_logo_url: str | None = None
+    race_time_ms: int | None = None
+    race_time_display: str | None = None
+    status: str
+    classification_status: str
+    tied: bool = False
+
+
+class ClassificationResponse(BaseModel):
+    prova_id: str
+    name: str
+    status: str
+    consolidate_results: bool
+    classification_criterion: str
+    is_provisional: bool
+    standings: list[ClassificationEntry] = Field(default_factory=list)
+    excluded: list[ClassificationEntry] = Field(default_factory=list)
+    battery_results: list[dict] = Field(default_factory=list)
+
+
+# --------------------------------------------------------------------------- #
 # Team
 # --------------------------------------------------------------------------- #
 class TeamCreate(BaseModel):
     name: str = Field(min_length=1, max_length=200)
+
+
+class TeamUpdate(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=200)
 
 
 class TeamResponse(BaseModel):
@@ -86,6 +161,7 @@ class TeamResponse(BaseModel):
     id: str
     event_id: str
     name: str
+    logo_url: str | None = None
 
 
 # --------------------------------------------------------------------------- #
@@ -118,6 +194,7 @@ class HeatResponse(BaseModel):
 
     id: str
     event_id: str
+    prova_id: str
     name: str
     order_num: int
     heat_type: str
@@ -202,3 +279,4 @@ class WSMessage(BaseModel):
 
 EventDetailResponse.model_rebuild()
 HeatResponse.model_rebuild()
+ProvaResponse.model_rebuild()
