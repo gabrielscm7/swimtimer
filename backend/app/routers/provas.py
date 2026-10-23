@@ -7,8 +7,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core.locks import _heat_guard
 from ..database import get_db
-from ..models import Heat, HeatLane, LapEvent, Prova
+from ..models import Event, Heat, HeatLane, LapEvent, Prova
 from ..schemas import OrderIdsRequest, ProvaCreate, ProvaUpdate
+from ..services import presentation
+from ..services.backup import backup_service
 from ..services.broadcast import (
     _broadcast_server_status,
     _prova_state_message,
@@ -21,6 +23,7 @@ from ..services.payloads import (
     _prova_payload,
     _prova_summary_payload,
     _provas_payload,
+    _sync_event_status,
     _sync_prova_status,
 )
 
@@ -130,6 +133,9 @@ async def update_prova(
             "consolidate_results",
             "classification_criterion",
             "distance_m",
+            "mixed_ranking",
+            "naipe",
+            "category",
         }
         if started and operational & set(data):
             raise HTTPException(status_code=409, detail="prova_ja_iniciada")
@@ -216,6 +222,8 @@ async def delete_prova(
     session: AsyncSession = Depends(get_db),
 ) -> None:
     prova = await _get_prova(session, prova_id)
+    event_id = prova.event_id
+    became_finished = False
     async with _heat_guard(f"event:{prova.event_id}"):
         session.expire_all()
         prova = await _get_prova(session, prova_id)
@@ -238,6 +246,24 @@ async def delete_prova(
             await session.execute(delete(Heat).where(Heat.id.in_(heat_ids)))
         await session.delete(prova)
         await session.commit()
+        refs = {f"prova:{prova_id}"}
+        refs.update(f"bateria:{heat_id}" for heat_id in heat_ids)
+        event = await session.get(Event, event_id)
+        if event is not None:
+            event.presentation_json = (
+                presentation.serialize_presentation(
+                    presentation.remove_refs(
+                        event.presentation_json, refs
+                    )
+                )
+            )
+        changed, became_finished = await _sync_event_status(
+            session, event_id
+        )
+        if changed or event is not None:
+            await session.commit()
+    if became_finished:
+        await backup_service.backup_now(event_id, kind="final")
     await _broadcast_server_status()
 
 

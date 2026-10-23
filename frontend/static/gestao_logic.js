@@ -121,6 +121,8 @@
       "Este atleta já está inscrito nesta bateria.",
     atleta_em_outra_bateria_ativa:
       "Este atleta já está em uma bateria ativa (ou em verificação) de outra prova.",
+    atleta_com_resultado:
+      "O atleta já possui resultado finalizado; alterar naipe/categoria exige exceção do supervisor.",
     override_reason_obrigatorio:
       "Informe o motivo da exceção para autorizar com o PIN do supervisor.",
     override_requer_pin_do_supervisor:

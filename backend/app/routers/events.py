@@ -20,17 +20,23 @@ from ..models import (
     ResultSnapshot,
     Team,
 )
-from ..schemas import EventCreate, EventTheme, EventUpdate
-from ..services import snapshots, themes
+from ..schemas import (
+    EventCreate,
+    EventTheme,
+    EventUpdate,
+    PresentationConfig,
+)
+from ..services import presentation, snapshots, themes
 from ..services.backup import backup_service
 from ..services.broadcast import (
+    _broadcast_presentation,
     _broadcast_server_status,
     _broadcast_settings,
     _broadcast_theme,
 )
 from ..services.lookups import _get_event
-from ..services.logos import _sniff_image
-from ..services.payloads import _event_payload
+from ..services.logos import _remove_logo_file, _sniff_image
+from ..services.payloads import _event_payload, _results_tree_payload
 
 router = APIRouter()
 
@@ -51,13 +57,16 @@ def _validate_contrast(theme: dict) -> None:
 
 @router.get("/api/events")
 async def list_events(
-    limit: int | None = Query(default=None, ge=1, le=500),
+    limit: int = Query(default=50, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     session: AsyncSession = Depends(get_db),
 ) -> list[dict]:
-    query = select(Event).order_by(Event.created_at.desc()).offset(offset)
-    if limit is not None:
-        query = query.limit(limit)
+    query = (
+        select(Event)
+        .order_by(Event.created_at.desc())
+        .limit(limit)
+        .offset(offset)
+    )
     result = await session.execute(query)
     return [
         await _event_payload(session, event, include_teams=True)
@@ -101,23 +110,71 @@ async def update_event(
     session: AsyncSession = Depends(get_db),
 ) -> dict:
     event = await _get_event(session, event_id)
+    data = payload.model_dump(exclude_unset=True)
+    if (
+        "pool_length_m" in data
+        and data["pool_length_m"] != event.pool_length_m
+    ):
+        started = await session.scalar(
+            select(func.count())
+            .select_from(Heat)
+            .where(
+                Heat.event_id == event_id,
+                Heat.status != "scheduled",
+            )
+        )
+        if started:
+            raise HTTPException(
+                status_code=409, detail="evento_ja_iniciado"
+            )
     previous_status = event.status
-    previous_public = (
-        bool(event.public_results_enabled),
-        event.public_name_mode,
-    )
-    for field, value in payload.model_dump(exclude_unset=True).items():
+    previous_name_mode = event.public_name_mode
+    for field, value in data.items():
         setattr(event, field, value)
     await session.commit()
     await session.refresh(event)
-    if previous_public != (
-        bool(event.public_results_enabled),
-        event.public_name_mode,
-    ):
+    if previous_name_mode != event.public_name_mode:
         await _broadcast_settings(event)
     if previous_status != "finished" and event.status == "finished":
         await backup_service.backup_now(event.id, kind="final")
     return await _event_payload(session, event, include_teams=True)
+
+
+@router.get("/api/events/{event_id}/presentation")
+async def get_event_presentation(
+    event_id: str,
+    session: AsyncSession = Depends(get_db),
+) -> dict:
+    event = await _get_event(session, event_id)
+    config = presentation.normalize_presentation(event.presentation_json)
+    return await presentation.hydrate_presentation(session, event, config)
+
+
+@router.put("/api/events/{event_id}/presentation")
+async def update_event_presentation(
+    event_id: str,
+    payload: PresentationConfig,
+    session: AsyncSession = Depends(get_db),
+) -> dict:
+    event = await _get_event(session, event_id)
+    config = presentation.normalize_presentation(payload.model_dump())
+    error = await presentation.validate_targets(session, event.id, config)
+    if error is not None:
+        raise HTTPException(status_code=422, detail=error)
+    event.presentation_json = presentation.serialize_presentation(config)
+    await session.commit()
+    await session.refresh(event)
+    await _broadcast_presentation(event.id, config)
+    return await presentation.hydrate_presentation(session, event, config)
+
+
+@router.get("/api/events/{event_id}/results")
+async def event_results_tree(
+    event_id: str,
+    session: AsyncSession = Depends(get_db),
+) -> dict:
+    event = await _get_event(session, event_id)
+    return await _results_tree_payload(session, event)
 
 
 @router.get("/api/events/{event_id}/theme")
@@ -260,9 +317,11 @@ async def delete_event(
 ) -> None:
     async with _theme_guard(event_id):
         event = await _get_event(session, event_id)
-        if event.status != "draft":
-            raise HTTPException(status_code=409, detail="evento_nao_esta_draft")
         theme = _theme_from_event(event)
+        result = await session.execute(
+            select(Team.logo_url).where(Team.event_id == event_id)
+        )
+        logo_urls = [url for url in result.scalars().all() if url]
         result = await session.execute(
             select(func.count())
             .select_from(ResultSnapshot)
@@ -272,6 +331,20 @@ async def delete_event(
             raise HTTPException(
                 status_code=409, detail="evento_possui_resultados"
             )
+        started = await session.scalar(
+            select(func.count())
+            .select_from(Heat)
+            .where(
+                Heat.event_id == event_id,
+                Heat.status != "scheduled",
+            )
+        )
+        if started:
+            raise HTTPException(
+                status_code=409, detail="evento_com_baterias_iniciadas"
+            )
+        if event.status != "draft":
+            raise HTTPException(status_code=409, detail="evento_nao_esta_draft")
         heat_ids = select(Heat.id).where(Heat.event_id == event_id)
         lane_ids = select(HeatLane.id).where(HeatLane.heat_id.in_(heat_ids))
         await session.execute(
@@ -289,4 +362,6 @@ async def delete_event(
         await session.delete(event)
         await session.commit()
         themes.remove_theme_files(theme, event_id)
+        for logo_url in logo_urls:
+            _remove_logo_file(logo_url)
         await _broadcast_server_status()

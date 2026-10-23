@@ -1,3 +1,4 @@
+import asyncio
 import uuid
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
@@ -5,6 +6,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import settings
+from ..core.locks import _theme_guard
 from ..database import get_db
 from ..models import Athlete, HeatLane, Team
 from ..schemas import TeamCreate, TeamResponse, TeamUpdate
@@ -79,6 +81,7 @@ async def upload_team_logo(
     team = await session.get(Team, team_id)
     if team is None:
         raise HTTPException(status_code=404, detail="equipe_nao_encontrada")
+    event_id = team.event_id
 
     data = await file.read(settings.MAX_LOGO_BYTES + 1)
     if len(data) > settings.MAX_LOGO_BYTES:
@@ -90,22 +93,26 @@ async def upload_team_logo(
         raise HTTPException(status_code=415, detail="formato_invalido")
     extension, _mime = signature
 
-    settings.logo_dir.mkdir(parents=True, exist_ok=True)
-    filename = f"{uuid.uuid4()}.{extension}"
-    destination = settings.logo_dir / filename
-    destination.write_bytes(data)
+    async with _theme_guard(event_id):
+        team = await session.get(Team, team_id)
+        if team is None:
+            raise HTTPException(status_code=404, detail="equipe_nao_encontrada")
+        settings.logo_dir.mkdir(parents=True, exist_ok=True)
+        filename = f"{uuid.uuid4()}.{extension}"
+        destination = settings.logo_dir / filename
+        await asyncio.to_thread(destination.write_bytes, data)
 
-    old_url = team.logo_url
-    team.logo_url = f"/logos/{filename}"
-    try:
-        await session.commit()
-    except Exception:
-        await session.rollback()
-        destination.unlink(missing_ok=True)
-        raise
-    await session.refresh(team)
-    if old_url != team.logo_url:
-        _remove_logo_file(old_url)
+        old_url = team.logo_url
+        team.logo_url = f"/logos/{filename}"
+        try:
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            await asyncio.to_thread(destination.unlink, True)
+            raise
+        await session.refresh(team)
+        if old_url != team.logo_url:
+            _remove_logo_file(old_url)
     return _team_dict(team)
 
 
@@ -117,11 +124,15 @@ async def delete_team_logo(
     team = await session.get(Team, team_id)
     if team is None:
         raise HTTPException(status_code=404, detail="equipe_nao_encontrada")
-    old_url = team.logo_url
-    team.logo_url = None
-    await session.commit()
-    await session.refresh(team)
-    _remove_logo_file(old_url)
+    async with _theme_guard(team.event_id):
+        team = await session.get(Team, team_id)
+        if team is None:
+            raise HTTPException(status_code=404, detail="equipe_nao_encontrada")
+        old_url = team.logo_url
+        team.logo_url = None
+        await session.commit()
+        await session.refresh(team)
+        _remove_logo_file(old_url)
     return _team_dict(team)
 
 
@@ -133,17 +144,23 @@ async def delete_team(
     team = await session.get(Team, team_id)
     if team is None:
         raise HTTPException(status_code=404, detail="equipe_nao_encontrada")
-    usage = await session.scalar(
-        select(func.count())
-        .select_from(HeatLane)
-        .where(HeatLane.team_id == team_id)
-    )
-    athletes = await session.scalar(
-        select(func.count())
-        .select_from(Athlete)
-        .where(Athlete.team_id == team_id)
-    )
-    if usage or athletes:
-        raise HTTPException(status_code=409, detail="equipe_em_uso")
-    await session.delete(team)
-    await session.commit()
+    async with _theme_guard(team.event_id):
+        team = await session.get(Team, team_id)
+        if team is None:
+            raise HTTPException(status_code=404, detail="equipe_nao_encontrada")
+        usage = await session.scalar(
+            select(func.count())
+            .select_from(HeatLane)
+            .where(HeatLane.team_id == team_id)
+        )
+        athletes = await session.scalar(
+            select(func.count())
+            .select_from(Athlete)
+            .where(Athlete.team_id == team_id)
+        )
+        if usage or athletes:
+            raise HTTPException(status_code=409, detail="equipe_em_uso")
+        old_url = team.logo_url
+        await session.delete(team)
+        await session.commit()
+        _remove_logo_file(old_url)

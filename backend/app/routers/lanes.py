@@ -9,6 +9,7 @@ from ..core.locks import _heat_guard
 from ..database import get_db
 from ..models import Athlete, HeatLane, LapEvent, Team
 from ..schemas import LaneActionRequest, LaneUpdate
+from ..services import snapshots
 from ..services.broadcast import (
     _broadcast_heat,
     _broadcast_ready,
@@ -24,7 +25,7 @@ from ..services.lane_actions import (
     _maybe_finish_heat,
 )
 from ..services.lookups import _get_heat, _get_lane
-from ..services.payloads import _lane_payload
+from ..services.payloads import _lane_payload, _sync_event_status
 
 router = APIRouter()
 
@@ -77,6 +78,11 @@ async def update_lane(
             if data["athlete_id"] is not None:
                 data["participant_name"] = athlete.name
                 data["team_id"] = athlete.team_id
+        elif data.get("team_id") is not None and lane.athlete_id:
+            # A equipe de uma raia vinculada a atleta e derivada do cadastro.
+            athlete = await session.get(Athlete, lane.athlete_id)
+            if athlete is not None and data["team_id"] != athlete.team_id:
+                raise HTTPException(status_code=422, detail="equipe_do_atleta")
         if data.get("team_id") is not None:
             team = await session.get(Team, data["team_id"])
             if team is None or team.event_id != heat.event_id:
@@ -185,10 +191,18 @@ async def lane_dq(
         )
         await session.commit()
         await session.refresh(lane)
+        changed, became_finished = await _sync_event_status(
+            session, heat.event_id
+        )
+        if changed:
+            await session.commit()
         await _broadcast_heat(session, heat)
         if all_finished:
             await _broadcast_server_status()
-            backup_service.schedule_after_finish(heat.event_id)
+            if became_finished:
+                await backup_service.backup_now(heat.event_id, kind="final")
+            else:
+                backup_service.schedule_after_finish(heat.event_id)
         return await _lane_payload(session, lane, heat)
 
 
@@ -203,10 +217,12 @@ async def undo_last_lap(
         session.expire_all()
         lane = await _get_lane(session, lane_id)
         heat = await _get_heat(session, lane.heat_id)
+        if heat.status not in ("active", "finished"):
+            raise HTTPException(status_code=409, detail="bateria_nao_ativa")
         result = await session.execute(
             select(LapEvent)
             .where(LapEvent.lane_id == lane_id, LapEvent.is_undo.is_(False))
-            .order_by(LapEvent.recorded_at.desc())
+            .order_by(LapEvent.lap_number.desc())
             .limit(1)
         )
         event = result.scalars().first()
@@ -224,6 +240,16 @@ async def undo_last_lap(
             )
             if int(result.scalar_one()) == 0:
                 lane.status = "assigned"
+        if heat.status == "finished":
+            # Correcao pos-finish: o resultado oficial precisa de nova revisao.
+            await snapshots.record_revision(
+                session,
+                heat,
+                reason=snapshots.REASON_UNDO_FINISH,
+                status=snapshots.SNAPSHOT_CORRECTED,
+                role="fiscal",
+                ip=_client_ip(request),
+            )
         _log_action(
             session,
             action="undo_lap",

@@ -35,7 +35,7 @@ Acesse `http://localhost:8080`
 
 ## Versão atual
 
-`v2.3.0` — Gestão de equipes/atletas, naipe da prova e reordenação transacional
+`v2.6.0` — Resultados internos e apresentação curada no telão
 
 Hierarquia: **Evento → Prova → Bateria → Raia/Atleta → Resultado**.
 Provas têm ordem única no programa do evento; baterias têm ordem única dentro da

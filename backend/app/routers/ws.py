@@ -22,9 +22,12 @@ async def _handle_ws_message(data: dict, websocket: WebSocket) -> None:
         return
     if message_type == "subscribe":
         event_id = data.get("event_id") or None
+        public = bool(data.get("public"))
+        event = None
         if event_id:
             async with database.AsyncSessionLocal() as session:
-                if await session.get(Event, event_id) is None:
+                event = await session.get(Event, event_id)
+                if event is None:
                     await manager.send_to(
                         websocket,
                         {
@@ -33,6 +36,13 @@ async def _handle_ws_message(data: dict, websocket: WebSocket) -> None:
                         },
                     )
                     return
+                name_mode = event.public_name_mode if public else None
+                manager.subscribe(websocket, event_id, name_mode)
+                await manager.send_to(
+                    websocket, {"type": "subscribed", "event_id": event_id}
+                )
+                await _send_initial_state(session, websocket, event_id)
+                return
         manager.subscribe(websocket, event_id)
         await manager.send_to(
             websocket, {"type": "subscribed", "event_id": event_id}
@@ -96,36 +106,40 @@ async def _handle_ws_message(data: dict, websocket: WebSocket) -> None:
             )
 
 
+async def _send_initial_state(
+    session, websocket: WebSocket, event_id: str
+) -> None:
+    result = await session.execute(
+        select(Heat)
+        .where(
+            Heat.event_id == event_id,
+            Heat.status.in_(("ready_check", "active")),
+        )
+        .order_by(Heat.order_num)
+    )
+    active_heats = list(result.scalars().all())
+    seen_provas: set[str] = set()
+    for heat in active_heats:
+        await manager.send_to(
+            websocket,
+            _heat_state_message(await _heat_payload(session, heat)),
+        )
+        if heat.prova_id in seen_provas:
+            continue
+        seen_provas.add(heat.prova_id)
+        prova = await session.get(Prova, heat.prova_id)
+        if prova is not None:
+            await manager.send_to(
+                websocket,
+                _prova_state_message(await _prova_payload(session, prova)),
+            )
+
+
 @router.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket) -> None:
     await manager.connect(websocket)
     try:
         await _broadcast_server_status()
-        async with database.AsyncSessionLocal() as session:
-            result = await session.execute(
-                select(Heat)
-                .where(Heat.status.in_(("ready_check", "active")))
-                .order_by(Heat.order_num)
-            )
-            active_heats = list(result.scalars().all())
-            for heat in active_heats:
-                await manager.send_to(
-                    websocket,
-                    _heat_state_message(await _heat_payload(session, heat)),
-                )
-            seen_provas: set[str] = set()
-            for heat in active_heats:
-                if heat.prova_id in seen_provas:
-                    continue
-                seen_provas.add(heat.prova_id)
-                prova = await session.get(Prova, heat.prova_id)
-                if prova is not None:
-                    await manager.send_to(
-                        websocket,
-                        _prova_state_message(
-                            await _prova_payload(session, prova)
-                        ),
-                    )
         while True:
             try:
                 data = await websocket.receive_json()

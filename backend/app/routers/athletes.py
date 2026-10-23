@@ -38,6 +38,7 @@ from ..services.athlete_import import (
     _parse_xlsx_rows,
 )
 from ..services.broadcast import manager
+from ..services.exports import csv_safe
 from ..services.inscricao import enforce_athlete_update
 from ..services.lookups import _get_event
 
@@ -83,6 +84,7 @@ async def _broadcast_athletes_changed(event_id: str) -> None:
         {
             "type": "athletes_changed",
             "scope": "event",
+            "event_id": event_id,
             "payload": {"event_id": event_id},
         }
     )
@@ -239,6 +241,8 @@ async def update_athlete(
     )
     if "name" in data and not data["name"]:
         raise HTTPException(status_code=422, detail="nome_obrigatorio")
+    if "naipe" in data and not data["naipe"]:
+        raise HTTPException(status_code=422, detail="naipe_obrigatorio")
 
     if "team_id" in data:
         await _validate_athlete_team(
@@ -291,7 +295,11 @@ async def update_athlete(
         .where(HeatLane.athlete_id == athlete.id)
         .values(participant_name=athlete.name, team_id=athlete.team_id)
     )
-    await session.commit()
+    try:
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        raise HTTPException(status_code=409, detail="atleta_duplicado")
     await session.refresh(athlete)
     team = await session.get(Team, athlete.team_id) if athlete.team_id else None
     await _broadcast_athletes_changed(athlete.event_id)
@@ -346,7 +354,9 @@ async def import_athletes(
 
     if fmt == "xlsx":
         try:
-            rows = _parse_xlsx_rows(data)
+            rows = _parse_xlsx_rows(data, settings.MAX_IMPORT_ROWS)
+        except HTTPException:
+            raise
         except Exception:
             raise HTTPException(
                 status_code=400, detail="planilha_invalida"
@@ -543,11 +553,11 @@ async def export_athletes(
     for athlete, team_name in result.all():
         writer.writerow(
             [
-                athlete.name,
-                team_name or "",
-                athlete.naipe,
-                athlete.category or "",
-                athlete.registration_code or "",
+                csv_safe(athlete.name),
+                csv_safe(team_name or ""),
+                csv_safe(athlete.naipe),
+                csv_safe(athlete.category or ""),
+                csv_safe(athlete.registration_code or ""),
             ]
         )
     return _attachment_response(

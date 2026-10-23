@@ -240,7 +240,7 @@ async function handleHeatDrop(targetId, provaId) {
     });
     await refresh();
   } catch (error) {
-    showToast(gestaoErrorMessage(error), true);
+    showToast(GestaoLogic.gestaoErrorMessage(error), true);
   }
 }
 

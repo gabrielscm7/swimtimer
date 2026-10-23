@@ -11,6 +11,26 @@ export class WSClient {
     this._reconnectTimer = null;
     this._heartbeat = null;
     this._pongTimer = null;
+    this._subscription = null;
+  }
+
+  subscribe(eventId, options = {}) {
+    if (!eventId) {
+      this._subscription = null;
+      return false;
+    }
+    this._subscription = {
+      event_id: eventId,
+      public: Boolean(options.public),
+    };
+    return this._sendSubscription();
+  }
+
+  _sendSubscription() {
+    if (!this._subscription) return false;
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return false;
+    this.ws.send(JSON.stringify({ type: "subscribe", ...this._subscription }));
+    return true;
   }
 
   connect() {
@@ -26,22 +46,27 @@ export class WSClient {
       clearTimeout(this._reconnectTimer);
       this._reconnectTimer = null;
     }
+    let socket;
     try {
-      this.ws = new WebSocket(this.url);
+      socket = new WebSocket(this.url);
     } catch (error) {
       this._status(false);
       this._scheduleReconnect();
       return;
     }
+    this.ws = socket;
 
-    this.ws.onopen = () => {
+    socket.onopen = () => {
+      if (this.ws !== socket) return;
       this.attempts = 0;
       syncServerClock();
+      this._sendSubscription();
       this._status(true);
       this._startHeartbeat();
     };
 
-    this.ws.onmessage = (event) => {
+    socket.onmessage = (event) => {
+      if (this.ws !== socket) return;
       try {
         const message = JSON.parse(event.data);
         if (message && message.type === "pong") {
@@ -57,15 +82,17 @@ export class WSClient {
       }
     };
 
-    this.ws.onclose = () => {
+    socket.onclose = () => {
+      if (this.ws !== socket) return;
       this._stopHeartbeat();
       this._status(false);
       this._scheduleReconnect();
     };
 
-    this.ws.onerror = () => {
+    socket.onerror = () => {
+      if (this.ws !== socket) return;
       try {
-        this.ws.close();
+        socket.close();
       } catch (error) {
         /* noop */
       }

@@ -1,7 +1,7 @@
 import { api } from "../common/api.js";
 import { escapeHtml } from "../common/format.js";
 import { pluralize, showToast } from "../common/ui.js";
-import { MAX_LOGO_BYTES, els, state } from "./state.js";
+import { MAX_LOGO_BYTES, els, eventId, state } from "./state.js";
 import { refresh, setFieldError, teamLogoHTML, withButton } from "./ui.js";
 
 

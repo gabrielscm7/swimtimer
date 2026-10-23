@@ -53,6 +53,11 @@ registradas e nunca interrompem a prova. O diário serve para auditoria externa
 
 ### Resultados públicos e privacidade
 
+> **Atualização 2.6.0:** o QR Code, a página pública mobile e os endpoints
+> `/api/public/...` foram removidos. O telão usa o evento ao vivo + a curadoria
+> definida na página interna de resultados. `public_name_mode` continua valendo
+> para a TV; `public_results_enabled` ficou obsoleto.
+
 - `/api/public/...` são somente leitura, sem PIN, com `Cache-Control:
   max-age=2` e ETag (304). Não expõem `action_log`, IPs, motivos internos nem
   nomes completos quando o modo é `initials` (mascaramento no servidor).

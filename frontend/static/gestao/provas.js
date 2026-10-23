@@ -8,7 +8,7 @@ import {
   wireHeatDragAndDrop,
   wireHeatForm,
 } from "./baterias.js";
-import { els, state } from "./state.js";
+import { els, eventId, state } from "./state.js";
 import {
   heatsOfProva,
   isEditableProva,
@@ -301,7 +301,7 @@ async function handleProvaDrop(targetId) {
     });
     await refresh();
   } catch (error) {
-    showToast(gestaoErrorMessage(error), true);
+    showToast(GestaoLogic.gestaoErrorMessage(error), true);
   }
 }
 

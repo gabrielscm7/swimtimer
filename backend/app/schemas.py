@@ -1,7 +1,13 @@
 import re
 from typing import Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+)
 
 EventStatus = Literal["draft", "active", "finished"]
 HeatType = Literal["maratona", "bateria"]
@@ -45,6 +51,24 @@ def normalize_category(value: object) -> object:
 
 
 
+def _reject_null(model: BaseModel, fields: tuple[str, ...]) -> BaseModel:
+    """Rejeita null explicito em campos de coluna NOT NULL."""
+    nulls = [
+        name
+        for name in fields
+        if name in model.model_fields_set and getattr(model, name) is None
+    ]
+    if nulls:
+        raise ValueError(f"campos_obrigatorios:{','.join(nulls)}")
+    return model
+
+
+def _trim_required_name(value: object) -> object:
+    if isinstance(value, str):
+        return value.strip()
+    return value
+
+
 def format_race_time(race_time_ms: int | None) -> str | None:
     if race_time_ms is None:
         return None
@@ -70,6 +94,11 @@ class EventCreate(BaseModel):
     date: Optional[str] = Field(default=None, max_length=40)
     pool_length_m: int = 25
 
+    @field_validator("name", mode="before")
+    @classmethod
+    def _trim_name(cls, value: object) -> object:
+        return _trim_required_name(value)
+
     @field_validator("pool_length_m")
     @classmethod
     def _validate_pool(cls, value: int) -> int:
@@ -87,12 +116,30 @@ class EventUpdate(BaseModel):
     public_results_enabled: Optional[bool] = None
     public_name_mode: Optional[PublicNameMode] = None
 
+    @field_validator("name", mode="before")
+    @classmethod
+    def _trim_name(cls, value: object) -> object:
+        return _trim_required_name(value)
+
     @field_validator("pool_length_m")
     @classmethod
     def _validate_pool(cls, value: int | None) -> int | None:
         if value is not None and value not in (25, 50):
             raise ValueError("pool_length_m deve ser 25 ou 50")
         return value
+
+    @model_validator(mode="after")
+    def _required_fields(self) -> "EventUpdate":
+        return _reject_null(
+            self,
+            (
+                "name",
+                "pool_length_m",
+                "status",
+                "public_results_enabled",
+                "public_name_mode",
+            ),
+        )
 
 
 class EventTheme(BaseModel):
@@ -149,6 +196,24 @@ class EventTheme(BaseModel):
         return value
 
 
+class PresentationSlide(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["prova", "bateria"]
+    target_id: str = Field(min_length=1, max_length=80)
+
+
+class PresentationConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = True
+    rotation: bool = True
+    slide_duration_s: int = Field(default=15, ge=5, le=60)
+    show_next_prova: bool = True
+    pinned_ref: Optional[str] = Field(default=None, max_length=100)
+    slides: list[PresentationSlide] = Field(default_factory=list)
+
+
 class EventResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -182,6 +247,11 @@ class ProvaCreate(BaseModel):
     consolidate_results: bool = True
     classification_criterion: ClassificationCriterion = "lowest_time"
 
+    @field_validator("name", mode="before")
+    @classmethod
+    def _trim_name(cls, value: object) -> object:
+        return _trim_required_name(value)
+
     @field_validator("naipe", mode="before")
     @classmethod
     def _normalize_naipe(cls, value: object) -> object:
@@ -204,6 +274,11 @@ class ProvaUpdate(BaseModel):
     consolidate_results: Optional[bool] = None
     classification_criterion: Optional[ClassificationCriterion] = None
 
+    @field_validator("name", mode="before")
+    @classmethod
+    def _trim_name(cls, value: object) -> object:
+        return _trim_required_name(value)
+
     @field_validator("naipe", mode="before")
     @classmethod
     def _normalize_naipe(cls, value: object) -> object:
@@ -213,6 +288,19 @@ class ProvaUpdate(BaseModel):
     @classmethod
     def _normalize_category(cls, value: object) -> object:
         return normalize_category(value)
+
+    @model_validator(mode="after")
+    def _required_fields(self) -> "ProvaUpdate":
+        return _reject_null(
+            self,
+            (
+                "name",
+                "order_num",
+                "mixed_ranking",
+                "consolidate_results",
+                "classification_criterion",
+            ),
+        )
 
 
 class OrderIdsRequest(BaseModel):
@@ -384,9 +472,23 @@ class AthleteListResponse(BaseModel):
 class TeamCreate(BaseModel):
     name: str = Field(min_length=1, max_length=200)
 
+    @field_validator("name", mode="before")
+    @classmethod
+    def _trim_name(cls, value: object) -> object:
+        return _trim_required_name(value)
+
 
 class TeamUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=200)
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def _trim_name(cls, value: object) -> object:
+        return _trim_required_name(value)
+
+    @model_validator(mode="after")
+    def _required_fields(self) -> "TeamUpdate":
+        return _reject_null(self, ("name",))
 
 
 class TeamResponse(BaseModel):
@@ -409,6 +511,11 @@ class HeatCreate(BaseModel):
     distance_m: Optional[int] = Field(default=None, gt=0)
     duration_s: Optional[int] = Field(default=None, gt=0)
 
+    @field_validator("name", mode="before")
+    @classmethod
+    def _trim_name(cls, value: object) -> object:
+        return _trim_required_name(value)
+
     @field_validator("distance_m")
     @classmethod
     def _validate_distance(cls, value: int | None) -> int | None:
@@ -422,6 +529,22 @@ class HeatUpdate(BaseModel):
     order_num: Optional[int] = Field(default=None, ge=1)
     distance_m: Optional[int] = Field(default=None, gt=0)
     duration_s: Optional[int] = Field(default=None, gt=0)
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def _trim_name(cls, value: object) -> object:
+        return _trim_required_name(value)
+
+    @field_validator("distance_m")
+    @classmethod
+    def _validate_distance(cls, value: int | None) -> int | None:
+        if value is not None and value not in (25, 50, 100, 200, 400, 800, 1500):
+            raise ValueError("distance_m invalido")
+        return value
+
+    @model_validator(mode="after")
+    def _required_fields(self) -> "HeatUpdate":
+        return _reject_null(self, ("name", "order_num"))
 
 
 class HeatResponse(BaseModel):
@@ -484,7 +607,6 @@ class HeatLaneResponse(BaseModel):
     naipe: str | None = None
     participant_name: str | None = None
     athlete_id: str | None = None
-    naipe: str | None = None
     category: str | None = None
     team_id: str | None = None
     team: str | None = None

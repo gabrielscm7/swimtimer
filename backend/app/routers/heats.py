@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core.locks import _heat_guard
 from ..database import get_db
-from ..models import Athlete, Heat, HeatLane, LapEvent, Prova, Team
+from ..models import Athlete, Event, Heat, HeatLane, LapEvent, Prova, Team
 from ..schemas import (
     HeatCreate,
     HeatLaneConfigRequest,
@@ -21,6 +21,7 @@ from ..services.broadcast import (
     _prova_state_message,
     manager,
 )
+from ..services import presentation
 from ..services.backup import backup_service
 from ..services.inscricao import enforce_heat_inscricao
 from ..services.lane_actions import (
@@ -42,6 +43,7 @@ from ..services.payloads import (
     _participant_lanes,
     _prova_heats,
     _prova_payload,
+    _sync_event_status,
     _sync_prova_status,
 )
 
@@ -101,6 +103,11 @@ async def create_heat_in_prova(
             raise HTTPException(status_code=400, detail="order_num_duplicado")
         await session.refresh(heat)
         await session.refresh(prova)
+        changed, _became_finished = await _sync_event_status(
+            session, heat.event_id
+        )
+        if changed:
+            await session.commit()
 
     await _broadcast_server_status()
     await manager.broadcast(
@@ -132,6 +139,16 @@ async def get_heat(
     return payload
 
 
+@router.get("/api/heats/{heat_id}/snapshots")
+async def list_heat_snapshots(
+    heat_id: str,
+    session: AsyncSession = Depends(get_db),
+) -> list[dict]:
+    heat = await _get_heat(session, heat_id)
+    rows = await snapshots.list_for_heat(session, heat.id)
+    return [snapshots.snapshot_summary(row) for row in rows]
+
+
 @router.get("/api/events/{event_id}/heats")
 async def list_heats(
     event_id: str,
@@ -157,12 +174,30 @@ async def update_heat(
     session: AsyncSession = Depends(get_db),
 ) -> dict:
     heat = await _get_heat(session, heat_id)
-    async with _heat_guard(f"prova:{heat.prova_id}"):
+    async with _heat_guard(heat_id):
         session.expire_all()
         heat = await _get_heat(session, heat_id)
         if heat.status not in ("scheduled", "ready_check"):
             raise HTTPException(status_code=409, detail="bateria_ja_iniciada")
         data = payload.model_dump(exclude_unset=True)
+        if heat.heat_type == "bateria":
+            if data.get("duration_s") is not None:
+                raise HTTPException(
+                    status_code=422, detail="campo_incompativel_bateria"
+                )
+            if "distance_m" in data and data["distance_m"] is None:
+                raise HTTPException(
+                    status_code=422, detail="distance_m_obrigatorio"
+                )
+        else:
+            if data.get("distance_m") is not None:
+                raise HTTPException(
+                    status_code=422, detail="campo_incompativel_maratona"
+                )
+            if "duration_s" in data and data["duration_s"] is None:
+                raise HTTPException(
+                    status_code=422, detail="duration_s_obrigatorio"
+                )
         new_order = data.get("order_num")
         if new_order is not None and new_order != heat.order_num:
             result = await session.execute(
@@ -237,7 +272,9 @@ async def delete_heat(
 ) -> None:
     heat = await _get_heat(session, heat_id)
     prova_id = heat.prova_id
-    async with _heat_guard(f"prova:{prova_id}"):
+    event_id = heat.event_id
+    became_finished = False
+    async with _heat_guard(heat_id):
         session.expire_all()
         heat = await _get_heat(session, heat_id)
         if heat.status != "scheduled":
@@ -255,6 +292,19 @@ async def delete_heat(
         await session.flush()
         await _sync_prova_status(session, prova_id)
         await session.commit()
+        event = await session.get(Event, event_id)
+        if event is not None:
+            event.presentation_json = (
+                presentation.serialize_presentation(
+                    presentation.remove_refs(
+                        event.presentation_json,
+                        {f"bateria:{heat_id}"},
+                    )
+                )
+            )
+        changed, became_finished = await _sync_event_status(session, event_id)
+        if changed or event is not None:
+            await session.commit()
         prova = await session.get(Prova, prova_id)
         payload_out = (
             _prova_state_message(await _prova_payload(session, prova))
@@ -262,6 +312,8 @@ async def delete_heat(
             else None
         )
     await _broadcast_server_status()
+    if became_finished:
+        await backup_service.backup_now(event_id, kind="final")
     if payload_out is not None:
         await manager.broadcast(payload_out)
 
@@ -280,6 +332,11 @@ async def open_ready_check(
         await _sync_prova_status(session, heat.prova_id)
         await session.commit()
         await session.refresh(heat)
+        changed, _became_finished = await _sync_event_status(
+            session, heat.event_id
+        )
+        if changed:
+            await session.commit()
         await _broadcast_heat(session, heat)
         await _broadcast_ready(session, heat)
         return await _heat_payload(session, heat)
@@ -300,10 +357,19 @@ async def start_heat(
                 status_code=400, detail="bateria_nao_esta_em_ready_check"
             )
 
+        if heat.heat_type == "bateria" and heat.distance_m is None:
+            raise HTTPException(status_code=400, detail="distance_m_obrigatorio")
+        if heat.heat_type == "maratona" and heat.duration_s is None:
+            raise HTTPException(status_code=400, detail="duration_s_obrigatorio")
+
         lanes = await _heat_lanes(session, heat.id)
         participants = _participant_lanes(lanes)
         if not participants:
             raise HTTPException(status_code=400, detail="sem_participantes")
+        if any(lane.finish_at is not None for lane in participants):
+            raise HTTPException(
+                status_code=409, detail="bateria_com_resultados_anteriores"
+            )
         if not direct_start:
             pending = [
                 lane.lane_number for lane in participants if lane.status != "ready"
@@ -333,6 +399,11 @@ async def start_heat(
         await _sync_prova_status(session, heat.prova_id)
         await session.commit()
         await session.refresh(heat)
+        changed, _became_finished = await _sync_event_status(
+            session, heat.event_id
+        )
+        if changed:
+            await session.commit()
         await _broadcast_heat(session, heat)
         await _broadcast_ready(session, heat)
         await _broadcast_server_status()
@@ -351,15 +422,41 @@ async def abort_heat(
         if heat.status not in ("ready_check", "active"):
             raise HTTPException(status_code=409, detail="bateria_nao_esta_ativa")
         now = time.time()
+        was_active = heat.status == "active"
         heat.status = "scheduled"
         heat.started_at = None
         heat.finished_at = None
         _drop_anchor(heat.id)
-        result = await session.execute(
-            update(HeatLane)
-            .where(HeatLane.heat_id == heat.id, HeatLane.status == "active")
-            .values(status="ready")
-        )
+        if was_active:
+            # Cancelar a prova invalida tempos, DQ e voltas parciais; as raias
+            # continuam inscritas e voltam a "ready" para um novo disparo.
+            lane_ids = select(HeatLane.id).where(HeatLane.heat_id == heat.id)
+            await session.execute(
+                delete(LapEvent).where(LapEvent.lane_id.in_(lane_ids))
+            )
+            await session.execute(
+                update(HeatLane)
+                .where(
+                    HeatLane.heat_id == heat.id,
+                    HeatLane.status.in_(("active", "finished", "dq")),
+                )
+                .values(
+                    status="ready",
+                    finish_at=None,
+                    race_time_ms=None,
+                    received_at=None,
+                    late=False,
+                )
+            )
+        else:
+            await session.execute(
+                update(HeatLane)
+                .where(
+                    HeatLane.heat_id == heat.id,
+                    HeatLane.status == "active",
+                )
+                .values(status="ready")
+            )
         _log_action(
             session,
             action="abort",
@@ -372,6 +469,11 @@ async def abort_heat(
         await _sync_prova_status(session, heat.prova_id)
         await session.commit()
         await session.refresh(heat)
+        changed, _became_finished = await _sync_event_status(
+            session, heat.event_id
+        )
+        if changed:
+            await session.commit()
         await _broadcast_heat(session, heat)
         await _broadcast_ready(session, heat)
         await _broadcast_server_status()
@@ -391,6 +493,8 @@ async def finish_heat(
             return await _heat_payload(session, heat)
         if heat.status == "scheduled":
             raise HTTPException(status_code=409, detail="bateria_nao_iniciada")
+        if heat.status != "active":
+            raise HTTPException(status_code=409, detail="bateria_nao_ativa")
         now = time.time()
         heat.status = "finished"
         heat.finished_at = now
@@ -415,9 +519,17 @@ async def finish_heat(
         await _sync_prova_status(session, heat.prova_id)
         await session.commit()
         await session.refresh(heat)
+        changed, became_finished = await _sync_event_status(
+            session, heat.event_id
+        )
+        if changed:
+            await session.commit()
         await _broadcast_heat(session, heat)
         await _broadcast_server_status()
-        backup_service.schedule_after_finish(heat.event_id)
+        if became_finished:
+            await backup_service.backup_now(heat.event_id, kind="final")
+        else:
+            backup_service.schedule_after_finish(heat.event_id)
         return await _heat_payload(session, heat)
 
 
@@ -447,6 +559,21 @@ async def homologate_heat(
             status=snapshots.SNAPSHOT_OFFICIAL,
             role="supervisor",
             ip=_client_ip(request),
+        )
+        now = time.time()
+        _log_action(
+            session,
+            action="homologate",
+            received_at=now,
+            effective_ts=now,
+            event_id=heat.event_id,
+            heat_id=heat.id,
+            source_ip=_client_ip(request),
+            payload={
+                "snapshot_id": snapshot.id,
+                "revision": snapshot.revision,
+                "hash": snapshot.hash,
+            },
         )
         await session.commit()
         await session.refresh(heat)

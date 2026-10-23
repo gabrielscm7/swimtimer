@@ -4,15 +4,64 @@ Formato: [Semantic Versioning](https://semver.org/lang/pt-BR/)
 
 ---
 
+## [2.6.0] — 2026-10-23
+
+### Added
+- Página interna de resultados (`resultados.html`) com navegação evento →
+  prova → bateria, classificação agregada, detalhe das baterias, histórico de
+  snapshots, súmula e exportação.
+- Curadoria do telão: playlist de provas/baterias, rotação, duração do slide,
+  “fixar agora”, exibição opcional da próxima prova no rodapé e persistência em
+  `event.presentation_json` (migração `0013_event_presentation`).
+- Endpoints `GET/PUT /api/events/{id}/presentation`,
+  `GET /api/events/{id}/results` e `GET /api/heats/{id}/snapshots`.
+- Evento WebSocket `presentation_updated`.
+- O telão mantém a prova ao vivo como prioridade e, sem prova ao vivo, exibe a
+  curadoria definida pelo supervisor.
+
+### Removed
+- QR Code e página pública mobile de resultados.
+- Endpoints `/api/public/...` e serviço `public_results`.
+- Toggle de “publicar resultados públicos” na gestão; `public_name_mode`
+  continua controlando a exibição de nomes no telão.
+
+### Fixed
+- Gestão: módulos que usavam `eventId` sem importar de `state.js`, salvamento de
+  raia individual (`Number(uuid)` → `NaN`) e chamadas sem namespace de
+  `gestaoErrorMessage`
+- TV pública: `ReferenceError` (`perBattery`) em provas com
+  `consolidate_results=false`
+- `PATCH` com `null` em campos `NOT NULL` agora retorna 422 (antes 500)
+- `abort` invalida tempos/DQ/voltas parciais e permite novo disparo
+- `undo_lap` após finish gera snapshot `corrected` (`undo_finish`)
+- Cadeia de snapshots é comitada sob o lock do evento (corrige fork sob
+  concorrência entre baterias do mesmo evento)
+- Metadados de snapshot (`status`, `revision`, autor, IP) entram no payload
+  canônico e são verificados por `/audit/verify`
+- `op_id` reutilizado em outra raia/ação retorna 409 `op_id_conflitante`
+- `finish` rejeita raia DQ/vazia; `update_lane` não dessincroniza equipe de
+  atleta
+- Ciclo de vida do evento (`draft`/`active`/`finished`) automático; exclusão de
+  evento com bateria iniciada bloqueada
+- Maratona finaliza pelo relógio do servidor, independente do navegador
+- WebSocket: `athletes_changed` com `event_id` no topo, assinatura por evento e
+  mascaramento de nomes para assinantes públicos
+- Journal só grava após commit; importação XLSX limita linhas antes de
+  materializar; CSV escapa fórmulas; logos são limpos e serializados
+- Limpeza de locks com `WeakValueDictionary` e broadcast WS sem bloqueio de
+  cabeça de fila
+
+---
+
 ## [2.5.0] — 2026-10-23
 
 ### Added
 - `result_snapshot` append-only: revisão imutável do resultado de cada bateria
   com payload canônico (atleta/equipe/naipe/categoria no momento), hash
   encadeado por evento e triggers SQLite que abortam UPDATE/DELETE
-- Revisão 1 (provisória) ao finalizar a bateria, nova revisão a cada correção
-  (DQ, reversão de DQ, reset/undo-finish — integração pelo contrato
-  `record_revision`) e na homologação
+- Revisão 1 (provisória) ao finalizar a bateria e revisão oficial na
+  homologação; o undo de volta após o finish gera revisão `corrected`. Os
+  reasons de DQ/reset permanecem como contrato para fluxos futuros.
 - `POST /api/heats/{id}/homologate` (supervisor) e
   `GET /api/events/{id}/audit/verify` (recalcula a cadeia de hashes)
 - Diário NDJSON por evento em `data/journal/<event_id>.ndjson` (append com

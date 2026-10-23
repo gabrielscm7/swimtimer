@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..core.locks import _heat_guard
 from ..models import Athlete, Event, Heat, HeatLane, LapEvent, ResultSnapshot, Team
 from ..schemas import format_race_time
-from .journal import append as journal_append
+from .journal import queue as journal_queue
 
 GENESIS = "0" * 64
 
@@ -152,16 +152,17 @@ async def record_revision(
     role: str,
     ip: str | None = None,
 ) -> ResultSnapshot:
-    """Adiciona uma revisao ao final da cadeia do evento (nao comita).
+    """Adiciona e comita uma revisao ao final da cadeia do evento.
 
-    Deve ser chamada na mesma transacao da acao que alterou o resultado.
+    O commit acontece dentro do lock por evento: sem isso, duas baterias do
+    mesmo evento poderiam ler o mesmo `prev_hash` e furcar a cadeia. A acao
+    que originou o snapshot e os dados de resultado sao comitados juntos.
     Reasons previstos: finish, homologacao, dq, dq_undo, reset_finish,
     undo_finish (os tres ultimos sao conectados pelo fluxo de correcoes).
     """
     await session.flush()
     async with _heat_guard(f"event:{heat.event_id}"):
         payload = await _snapshot_payload(session, heat)
-        payload_json = canonical_json(payload)
 
         result = await session.execute(
             select(ResultSnapshot.hash)
@@ -178,15 +179,31 @@ async def record_revision(
         )
         revision = int(result.scalar_one() or 0) + 1
 
+        snapshot_id = str(uuid.uuid4())
+        created_at = time.time()
+        # Metadados entram no payload canonico para que o hash cubra tambem
+        # status, motivo, revisao e autoria (compativel com snapshots antigos,
+        # que nao possuem a chave "snapshot").
+        payload["snapshot"] = {
+            "id": snapshot_id,
+            "revision": revision,
+            "status": status,
+            "reason": reason,
+            "created_at": created_at,
+            "created_by": role,
+            "created_by_ip": ip,
+        }
+        payload_json = canonical_json(payload)
+
         snapshot = ResultSnapshot(
-            id=str(uuid.uuid4()),
+            id=snapshot_id,
             event_id=heat.event_id,
             prova_id=heat.prova_id,
             heat_id=heat.id,
             revision=revision,
             status=status,
             reason=reason,
-            created_at=time.time(),
+            created_at=created_at,
             created_by=role,
             created_by_ip=ip,
             payload_json=payload_json,
@@ -194,7 +211,8 @@ async def record_revision(
             hash=hash_snapshot(prev_hash, payload_json),
         )
         session.add(snapshot)
-        journal_append(
+        journal_queue(
+            session,
             heat.event_id,
             {
                 "kind": "result_snapshot",
@@ -213,6 +231,7 @@ async def record_revision(
                 "hash": snapshot.hash,
             },
         )
+        await session.commit()
         return snapshot
 
 
@@ -226,6 +245,17 @@ async def latest_for_heat(
         .limit(1)
     )
     return result.scalar_one_or_none()
+
+
+async def list_for_heat(
+    session: AsyncSession, heat_id: str
+) -> list[ResultSnapshot]:
+    result = await session.execute(
+        select(ResultSnapshot)
+        .where(ResultSnapshot.heat_id == heat_id)
+        .order_by(text("rowid ASC"))
+    )
+    return list(result.scalars().all())
 
 
 async def latest_by_heat(
@@ -304,6 +334,31 @@ async def verify_event(session: AsyncSession, event_id: str) -> dict:
                 "reason": "payload_inconsistente",
                 "count": index,
             }
+        meta = payload.get("snapshot")
+        if meta is not None and not isinstance(meta, dict):
+            return {
+                "ok": False,
+                "broken_id": row.id,
+                "reason": "metadados_inconsistentes",
+                "count": index,
+            }
+        if isinstance(meta, dict):
+            expected_meta = {
+                "id": row.id,
+                "revision": row.revision,
+                "status": row.status,
+                "reason": row.reason,
+                "created_at": row.created_at,
+                "created_by": row.created_by,
+                "created_by_ip": row.created_by_ip,
+            }
+            if any(meta.get(key) != value for key, value in expected_meta.items()):
+                return {
+                    "ok": False,
+                    "broken_id": row.id,
+                    "reason": "metadados_inconsistentes",
+                    "count": index,
+                }
         prev_hash = row.hash
 
     return {"ok": True, "count": len(rows)}

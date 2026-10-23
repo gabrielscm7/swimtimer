@@ -1,11 +1,12 @@
 import asyncio
 from contextlib import asynccontextmanager
+from weakref import WeakValueDictionary
 
 # Locks por prova: serializam as transições de estado de uma mesma bateria
 # (finish/lap/dq/undo/start/abort/finish) evitando corridas de escrita no
 # SQLite. O processo roda com um único worker uvicorn, então locks em memória
 # são suficientes; a constraint única em lap_event é a rede de segurança.
-_heat_locks: dict[str, asyncio.Lock] = {}
+_heat_locks: WeakValueDictionary[str, asyncio.Lock] = WeakValueDictionary()
 _heat_locks_guard = asyncio.Lock()
 
 
@@ -28,7 +29,7 @@ async def _heat_guard(heat_id: str):
 # Locks por evento: serializam mudanças de tema e limpeza de imagens, evitando
 # que saves concorrentes apaguem arquivos ainda referenciados por outra
 # requisição. Mesma premissa de um único worker uvicorn dos locks de bateria.
-_theme_locks: dict[str, asyncio.Lock] = {}
+_theme_locks: WeakValueDictionary[str, asyncio.Lock] = WeakValueDictionary()
 _theme_locks_guard = asyncio.Lock()
 
 

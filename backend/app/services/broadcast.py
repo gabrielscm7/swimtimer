@@ -59,18 +59,29 @@ def _theme_updated_message(event_id: str, theme: dict) -> dict:
     }
 
 
+def _presentation_updated_message(event_id: str, payload: dict) -> dict:
+    return {
+        "type": "presentation_updated",
+        "scope": "event",
+        "event_id": event_id,
+        "payload": payload,
+    }
+
+
+async def _broadcast_presentation(event_id: str, config: dict) -> None:
+    await manager.broadcast(_presentation_updated_message(event_id, config))
+
+
 async def _broadcast_theme(event_id: str, theme: dict) -> None:
     await manager.broadcast(_theme_updated_message(event_id, theme))
 
 
 async def _broadcast_settings(event) -> None:
+    manager.update_name_mode(event.id, event.public_name_mode)
     await manager.broadcast(
         _settings_updated_message(
             event.id,
-            {
-                "public_results_enabled": bool(event.public_results_enabled),
-                "public_name_mode": event.public_name_mode,
-            },
+            {"public_name_mode": event.public_name_mode},
         )
     )
 

@@ -7,53 +7,101 @@
     <title>SwimTimer — Resultados</title>
     <link rel="stylesheet" href="/static/style.css" />
     <style>
-      .res-app {
-        max-width: 920px;
+      .res-shell {
+        max-width: 1500px;
         margin: 0 auto;
-        padding: 16px 14px 48px;
+        padding: 16px;
       }
-      .res-header {
+      .res-top {
         display: flex;
-        flex-direction: column;
-        gap: 6px;
+        align-items: flex-start;
+        gap: 16px;
+        flex-wrap: wrap;
         margin-bottom: 18px;
       }
-      .res-header h1 {
-        font-size: 1.5rem;
-        margin: 0;
+      .res-top-main {
+        flex: 1;
+        min-width: 240px;
+      }
+      .res-top h1 {
+        margin: 4px 0 4px;
+        font-size: 1.55rem;
         line-height: 1.2;
       }
       .res-meta {
         color: var(--muted);
         font-size: 0.9rem;
       }
-      .res-search {
-        margin-top: 10px;
-        width: 100%;
-        padding: 12px 14px;
-        border-radius: 12px;
-        border: 1px solid var(--border);
-        background: var(--input-bg);
-        color: var(--text);
-        font-size: 1rem;
+      .res-layout {
+        display: grid;
+        grid-template-columns: 250px minmax(0, 1fr) 340px;
+        gap: 16px;
+        align-items: start;
       }
-      .res-prova {
+      .res-side,
+      .res-presentation {
+        position: sticky;
+        top: 12px;
+        max-height: calc(100vh - 24px);
+        overflow: auto;
         background: var(--panel);
         border: 1px solid var(--border);
         border-radius: var(--radius);
-        padding: 14px;
-        margin-bottom: 16px;
+        padding: 12px;
       }
-      .res-prova-head {
+      .res-side h2,
+      .res-presentation h2 {
+        margin: 0 0 10px;
+        font-size: 0.78rem;
+        letter-spacing: 1px;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+      .res-prova-btn {
+        display: block;
+        width: 100%;
+        text-align: left;
+        background: transparent;
+        border: 1px solid transparent;
+        color: var(--text);
+        border-radius: 10px;
+        padding: 9px 10px;
+        margin-bottom: 5px;
+        cursor: pointer;
+        font: inherit;
+      }
+      .res-prova-btn:hover {
+        background: var(--bg-2);
+      }
+      .res-prova-btn.active {
+        border-color: var(--cyan);
+        background: rgba(0, 212, 255, 0.08);
+      }
+      .res-prova-btn small {
+        display: block;
+        color: var(--muted);
+        margin-top: 3px;
+      }
+      .res-main {
+        min-width: 0;
+      }
+      .res-card {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        padding: 16px;
+        margin-bottom: 14px;
+      }
+      .res-card-head {
         display: flex;
         align-items: center;
         gap: 10px;
         flex-wrap: wrap;
-        margin-bottom: 4px;
+        margin-bottom: 8px;
       }
-      .res-prova-head h2 {
-        font-size: 1.1rem;
+      .res-card-head h2 {
         margin: 0;
+        font-size: 1.15rem;
         flex: 1;
         min-width: 160px;
       }
@@ -62,7 +110,7 @@
         align-items: center;
         padding: 3px 9px;
         border-radius: 999px;
-        font-size: 0.7rem;
+        font-size: 0.68rem;
         font-weight: 700;
         text-transform: uppercase;
         letter-spacing: 0.4px;
@@ -87,7 +135,7 @@
       }
       .res-section-title {
         text-transform: uppercase;
-        font-size: 0.75rem;
+        font-size: 0.72rem;
         letter-spacing: 0.6px;
         color: var(--muted);
         margin: 14px 0 6px;
@@ -95,18 +143,18 @@
       .res-table {
         width: 100%;
         border-collapse: collapse;
-        font-size: 0.92rem;
+        font-size: 0.9rem;
       }
       .res-table th,
       .res-table td {
         text-align: left;
-        padding: 8px 6px;
+        padding: 7px 6px;
         border-bottom: 1px solid var(--border);
         vertical-align: top;
       }
       .res-table th {
         color: var(--muted);
-        font-size: 0.72rem;
+        font-size: 0.68rem;
         text-transform: uppercase;
         letter-spacing: 0.4px;
       }
@@ -118,9 +166,6 @@
       .res-table td.time {
         white-space: nowrap;
         font-variant-numeric: tabular-nums;
-      }
-      .res-heats {
-        margin-top: 12px;
       }
       .res-heat {
         border: 1px solid var(--border);
@@ -141,13 +186,79 @@
       .res-heat > summary::-webkit-details-marker {
         display: none;
       }
-      .res-heat > summary .res-badge {
-        margin-left: auto;
+      .res-actions {
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+        margin-top: 10px;
       }
-      .res-legend {
-        color: var(--muted);
+      .res-actions button,
+      .res-presentation button,
+      .res-presentation input,
+      .res-presentation select {
+        font: inherit;
+      }
+      .res-btn {
+        border: 1px solid var(--border);
+        background: var(--bg-2);
+        color: var(--text);
+        border-radius: 9px;
+        padding: 7px 10px;
+        cursor: pointer;
         font-size: 0.82rem;
-        margin-top: 14px;
+      }
+      .res-btn:hover {
+        border-color: var(--cyan);
+        color: var(--cyan);
+      }
+      .res-btn.primary {
+        background: var(--cyan);
+        border-color: var(--cyan);
+        color: #041018;
+        font-weight: 700;
+      }
+      .res-btn.danger {
+        color: var(--red);
+        border-color: rgba(239, 68, 68, 0.4);
+      }
+      .res-slide {
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 8px;
+        margin-bottom: 6px;
+        background: var(--bg-2);
+      }
+      .res-slide.pinned {
+        border-color: var(--cyan);
+      }
+      .res-slide-title {
+        font-size: 0.84rem;
+        margin-bottom: 6px;
+        word-break: break-word;
+      }
+      .res-slide-actions {
+        display: flex;
+        gap: 4px;
+        flex-wrap: wrap;
+      }
+      .res-slide-actions .res-btn {
+        padding: 4px 7px;
+        font-size: 0.72rem;
+      }
+      .res-form-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin: 8px 0;
+        font-size: 0.84rem;
+      }
+      .res-form-row input[type="number"] {
+        width: 64px;
+        padding: 5px;
+        border-radius: 7px;
+        border: 1px solid var(--border);
+        background: var(--input-bg);
+        color: var(--text);
       }
       .res-message {
         background: var(--panel);
@@ -157,39 +268,78 @@
         text-align: center;
         color: var(--muted);
       }
-      @media (min-width: 700px) {
-        .res-header h1 {
-          font-size: 1.9rem;
+      .res-empty {
+        color: var(--muted);
+        font-size: 0.86rem;
+        padding: 10px 4px;
+      }
+      .res-snap {
+        font-size: 0.74rem;
+        color: var(--muted);
+        margin-top: 8px;
+      }
+      .res-legend {
+        color: var(--muted);
+        font-size: 0.78rem;
+        margin: 10px 0 0;
+      }
+      @media (max-width: 1180px) {
+        .res-layout {
+          grid-template-columns: 220px minmax(0, 1fr);
         }
-        .res-app {
-          padding-top: 28px;
+        .res-presentation {
+          grid-column: 1 / -1;
+          position: static;
+          max-height: none;
+        }
+      }
+      @media (max-width: 760px) {
+        .res-layout {
+          grid-template-columns: 1fr;
+        }
+        .res-side {
+          position: static;
+          max-height: none;
         }
       }
     </style>
   </head>
   <body>
-    <main class="res-app">
-      <header class="res-header">
-        <div class="brand">Swim<span>Timer</span></div>
-        <h1 id="res-event-name">Resultados</h1>
-        <div class="res-meta" id="res-event-meta"></div>
-        <div class="res-meta" id="res-settings-note"></div>
-        <input
-          class="res-search"
-          id="res-search"
-          type="search"
-          placeholder="Buscar atleta ou equipe"
-          autocomplete="off"
-        />
+    <main class="res-shell">
+      <header class="res-top">
+        <div class="res-top-main">
+          <div class="brand">Swim<span>Timer</span></div>
+          <h1 id="res-event-name">Resultados</h1>
+          <div class="res-meta" id="res-event-meta"></div>
+          <div class="res-meta" id="res-event-status"></div>
+        </div>
+        <div class="res-actions">
+          <a class="res-btn" href="index.html">← Home</a>
+          <a class="res-btn" id="res-public-link" target="_blank" rel="noopener">Abrir telão ↗</a>
+          <a class="res-btn" id="res-export-link">Exportar CSV</a>
+          <button class="res-btn" id="res-audit">Verificar auditoria</button>
+        </div>
       </header>
+
       <div id="res-status" class="res-message" hidden></div>
-      <section id="res-provas"></section>
-      <p class="res-legend" id="res-footer">
-        Resultados atualizados automaticamente. Selos: Oficial, Provisório e
-        Retificado.
-      </p>
+
+      <div class="res-layout">
+        <aside class="res-side">
+          <h2>Provas</h2>
+          <div id="res-provas"></div>
+        </aside>
+
+        <section class="res-main" id="res-detail">
+          <div class="res-message">Carregando resultados…</div>
+        </section>
+
+        <aside class="res-presentation">
+          <h2>Apresentação do telão</h2>
+          <div id="res-presentation"></div>
+        </aside>
+      </div>
     </main>
-    <script src="/static/results_logic.js"></script>
+
     <script type="module" src="/static/results.js"></script>
   </body>
 </html>

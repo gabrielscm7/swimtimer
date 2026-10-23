@@ -18,6 +18,13 @@ const {
   provaHeaderLabel,
 } = window.SequenceLogic;
 const { displayName } = window.ResultsLogic;
+const {
+  configOf: presentationConfigOf,
+  eligibleSlides: eligiblePresentationSlides,
+  resolveRef: resolvePresentationRef,
+  nextProva: nextProvaForDisplay,
+  nextProvaLabel,
+} = window.PublicPresentationLogic;
 const { normalizeTheme, pickReadableColor } = window.ThemeLogic;
 
 const RESULT_MS = 20000;
@@ -33,17 +40,19 @@ const els = {
   overlay: document.getElementById("pub-overlay"),
   dot: document.getElementById("pub-dot"),
   fullscreen: document.getElementById("pub-fullscreen"),
-  qr: document.getElementById("pub-qr"),
 };
 
 let eventData = null;
 let theme = normalizeTheme(null);
 let events = [];
-let state = 0; // 0 seleção, 1 aguardando, 2 ready, 3 prova, 4 resultado, 5 intervalo, 6 encerrado
+let state = 0; // 0 seleção, 1 aguardando, 2 ready, 3 prova, 4 resultado, 5 intervalo, 6 encerrado, 7 pós-prova, 8 slide curado
 let currentHeatId = null;
 let resultTimer = null;
 let tickInterval = null;
 let renderToken = 0;
+let slideTimer = null;
+let slideRef = null;
+let slideIndex = 0;
 const classifications = {};
 let classificationRequest = null;
 
@@ -70,25 +79,6 @@ function pubName(name) {
   return displayName(name, eventData ? eventData.public_name_mode : "full");
 }
 
-function updateQr() {
-  if (!els.qr) return;
-  if (preview || !eventData || eventData.public_results_enabled === false) {
-    els.qr.hidden = true;
-    return;
-  }
-  const url = new URL("resultados.html", window.location.href);
-  url.search = `?event=${encodeURIComponent(eventData.id)}`;
-  try {
-    const qr = qrcode(0, "M");
-    qr.addData(url.toString());
-    qr.make();
-    els.qr.innerHTML = `${qr.createSvgTag({ cellSize: 4, margin: 1 })}<div class="pub-qr-label">Resultados no celular</div>`;
-    els.qr.hidden = false;
-  } catch (error) {
-    els.qr.hidden = true;
-  }
-}
-
 function nextScheduledAfter(eventSeq) {
   return nextScheduledAfterSeq(heats(), eventSeq);
 }
@@ -105,6 +95,28 @@ function provaOf(heat) {
 function provasSorted() {
   if (!eventData || !eventData.provas) return [];
   return [...eventData.provas].sort((a, b) => a.order_num - b.order_num);
+}
+
+function snapshotLabel(status) {
+  return (
+    {
+      official: "Oficial",
+      provisional: "Provisório",
+      corrected: "Retificado",
+    }[status] || null
+  );
+}
+
+function provaSnapshotLabel(prova) {
+  if (!prova) return null;
+  const statuses = heats()
+    .filter((heat) => heat.prova_id === prova.id)
+    .map((heat) => heat.result_snapshot && heat.result_snapshot.status)
+    .filter(Boolean);
+  if (!statuses.length) return null;
+  if (statuses.every((status) => status === "official")) return "Oficial";
+  if (statuses.some((status) => status === "corrected")) return "Retificado";
+  return "Provisório";
 }
 
 function logoImg(url, name) {
@@ -125,10 +137,25 @@ function eventLogo() {
   )}" alt="${escapeHtml(eventTitle())}" />`;
 }
 
+function presentationConfig() {
+  return presentationConfigOf(eventData);
+}
+
+function nextProvaFooter() {
+  if (!eventData || !presentationConfig().show_next_prova) return null;
+  const reference = currentHeat() || lastFinished();
+  return nextProvaForDisplay(heats(), provasSorted(), reference);
+}
+
 function footer(fallback = "") {
   const text = theme.footer_text || fallback;
-  if (!text) return "";
-  return `<div class="pub-footer">${escapeHtml(text)}</div>`;
+  const next = nextProvaFooter();
+  const nextText = next ? nextProvaLabel(next) : "";
+  if (!text && !nextText) return "";
+  return `<div class="pub-footer">
+    ${text ? `<span>${escapeHtml(text)}</span>` : ""}
+    ${nextText ? `<span class="pub-next-prova">${escapeHtml(nextText)}</span>` : ""}
+  </div>`;
 }
 
 function applyTheme(raw) {
@@ -290,6 +317,7 @@ function render(html, fade = true) {
 }
 
 function setState(next, options = {}) {
+  if (next !== 8) stopSlideTimer();
   const heatId = options.heatId !== undefined ? options.heatId : currentHeatId;
   const same = next === state && heatId === currentHeatId;
   currentHeatId = heatId;
@@ -325,6 +353,7 @@ function renderState(fade) {
   else if (state === 5) render(viewInterval(), fade);
   else if (state === 6) render(viewEnded(), fade);
   else if (state === 7) render(viewProvaResult(), fade);
+  else if (state === 8) render(viewSlide(), fade);
 }
 
 function goAfterResult() {
@@ -335,10 +364,22 @@ function goAfterResult() {
   if (!nextInProva(heats(), heat)) {
     return setState(7, { heatId: heat.id });
   }
+  if (
+    presentationConfig().enabled &&
+    eligiblePresentationSlides(eventData).length
+  ) {
+    return resumeIdle();
+  }
   setState(5, { heatId: heat.id });
 }
 
 function goAfterProvaResult() {
+  if (
+    presentationConfig().enabled &&
+    eligiblePresentationSlides(eventData).length
+  ) {
+    return resumeIdle();
+  }
   const heat = currentHeat();
   const next = heat ? nextScheduledAfter(heat.event_seq) : null;
   if (next) setState(5, { heatId: heat.id });
@@ -376,6 +417,71 @@ function updateTick() {
       el.textContent = text;
     });
   }
+}
+
+// --------------------------------------------------------------------------- //
+// Apresentação curada
+// --------------------------------------------------------------------------- //
+function stopSlideTimer() {
+  if (slideTimer) {
+    window.clearTimeout(slideTimer);
+    slideTimer = null;
+  }
+}
+
+function showSlide(ref) {
+  stopSlideTimer();
+  if (resultTimer) {
+    window.clearTimeout(resultTimer);
+    resultTimer = null;
+  }
+  slideRef = ref;
+  state = 8;
+  renderState(true);
+  manageTick();
+}
+
+function advanceSlide() {
+  stopSlideTimer();
+  const slides = eligiblePresentationSlides(eventData);
+  if (!slides.length) {
+    slideRef = null;
+    return resumeIdle();
+  }
+  const config = presentationConfig();
+  if (config.pinned_ref) {
+    const pinned = slides.find((slide) => slide.ref === config.pinned_ref);
+    if (pinned) return showSlide(pinned.ref);
+  }
+  if (!config.rotation) {
+    slideIndex = 0;
+    return showSlide(slides[0].ref);
+  }
+  if (slideIndex >= slides.length) slideIndex = 0;
+  showSlide(slides[slideIndex].ref);
+  if (slides.length > 1) {
+    slideTimer = window.setTimeout(() => {
+      slideIndex += 1;
+      advanceSlide();
+    }, config.slide_duration_s * 1000);
+  }
+}
+
+function resumeIdle() {
+  stopSlideTimer();
+  if (
+    presentationConfig().enabled &&
+    eligiblePresentationSlides(eventData).length
+  ) {
+    slideIndex = 0;
+    return advanceSlide();
+  }
+  if (allFinished()) return setState(6, { heatId: null });
+  const last = lastFinished();
+  if (last && nextScheduledAfter(last.event_seq)) {
+    return setState(5, { heatId: last.id });
+  }
+  return setState(1, { heatId: null });
 }
 
 // --------------------------------------------------------------------------- //
@@ -467,7 +573,8 @@ function viewRacing() {
       </div>
       <div class="pub-racing-clock">${clock}</div>
     </div>
-    <div class="pub-racing-body">${battery ? batteryTable(heat, true) : marathonTable(heat, true)}</div>`;
+    <div class="pub-racing-body">${battery ? batteryTable(heat, true) : marathonTable(heat, true)}</div>
+    ${footer()}`;
 }
 
 function batteryTable(heat, live) {
@@ -616,11 +723,13 @@ function viewResult() {
       <div class="pub-label" style="color:var(--cyan)">🏁 Resultado da bateria</div>
       <div class="pub-heat-name">${escapeHtml(provaHeaderLabel(heat))}</div>
       <div class="pub-heat-type">${heatTypeLabel(heat)}</div>
+      ${heat.result_snapshot && snapshotLabel(heat.result_snapshot.status) ? `<div class="pub-label">${escapeHtml(snapshotLabel(heat.result_snapshot.status))}</div>` : ""}
       ${podium(heat)}
       <div class="pub-result-table" style="width:100%;max-width:1100px;margin-top:8px">
         ${compactTable(heat)}
         ${consolidated ? classificationTable(consolidated) : ""}
       </div>
+      ${footer()}
     </div>`;
 }
 
@@ -664,6 +773,23 @@ function viewInterval() {
     </div>`;
 }
 
+function perBatteryResult(prova, heat) {
+  const provaId = prova ? prova.id : heat.prova_id;
+  const provaHeats = heats().filter((item) => item.prova_id === provaId);
+  if (!provaHeats.length) {
+    return '<div class="muted">Classificação em processamento…</div>';
+  }
+  return provaHeats
+    .map(
+      (item) => `
+      <div class="pub-end-group">
+        <div class="pub-heat-name" style="font-size:calc(clamp(18px,2vw,30px) * var(--pub-font-scale))">Bateria ${item.heat_index_in_prova ?? item.order_num} · ${escapeHtml(item.name)}</div>
+        ${compactTable(item)}
+      </div>`
+    )
+    .join("");
+}
+
 function viewProvaResult() {
   const heat = currentHeat();
   if (!heat) return viewWaiting();
@@ -684,9 +810,78 @@ function viewProvaResult() {
       <div class="pub-label" style="color:var(--cyan)">🏁 Resultado final da prova</div>
       <div class="pub-heat-name">${escapeHtml(prova ? `${prova.order_num}. ${prova.name}` : heat.prova_name || heat.name)}</div>
       ${meta ? `<div class="pub-heat-type">${escapeHtml(meta)}</div>` : ""}
+      ${provaSnapshotLabel(prova) ? `<div class="pub-label">${escapeHtml(provaSnapshotLabel(prova))}</div>` : ""}
       <div class="pub-result-table" style="width:100%;max-width:1100px;margin-top:12px">
-        ${data ? classificationTable(data) : perBattery || '<div class="muted">Classificação em processamento…</div>'}
+        ${data ? classificationTable(data) : perBatteryResult(prova, heat)}
       </div>
+      ${footer()}
+    </div>`;
+}
+
+function viewSlide() {
+  const info = slideRef
+    ? resolvePresentationRef(slideRef, eventData)
+    : null;
+  if (!info) {
+    return `
+      <div class="pub-center">
+        <div class="pub-subtitle">Apresentação sem conteúdo disponível.</div>
+        ${footer()}
+      </div>`;
+  }
+  if (info.kind === "prova") return viewProvaSlide(info.prova);
+  return viewBatterySlide(info.heat);
+}
+
+function viewProvaSlide(prova) {
+  const data = prova.consolidate_results
+    ? classifications[prova.id]
+    : null;
+  const provaHeats = heats().filter((heat) => heat.prova_id === prova.id);
+  const body = data
+    ? classificationTable(data)
+    : provaHeats
+        .map(
+          (heat) => `
+          <div class="pub-end-group">
+            <div class="pub-heat-name" style="font-size:calc(clamp(18px,2vw,30px) * var(--pub-font-scale))">Bateria ${heat.heat_index_in_prova ?? heat.order_num} · ${escapeHtml(heat.name)}</div>
+            ${compactTable(heat)}
+          </div>`
+        )
+        .join("") ||
+      '<div class="muted">Classificação em processamento…</div>';
+  const meta = [
+    prova.naipe === "MISTO" ? "Misto" : "",
+    prova.category || "",
+    prova.distance_m ? `${prova.distance_m}m` : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  return `
+    <div class="pub-center" style="justify-content:flex-start;padding-top:16px">
+      <div class="pub-label" style="color:var(--cyan)">🏁 Resultado da prova</div>
+      <div class="pub-heat-name">${prova.order_num}. ${escapeHtml(prova.name)}</div>
+      ${meta ? `<div class="pub-heat-type">${escapeHtml(meta)}</div>` : ""}
+      ${provaSnapshotLabel(prova) ? `<div class="pub-label">${escapeHtml(provaSnapshotLabel(prova))}</div>` : ""}
+      <div class="pub-result-table" style="width:100%;max-width:1100px;margin-top:12px">
+        ${body}
+      </div>
+      ${footer()}
+    </div>`;
+}
+
+function viewBatterySlide(heat) {
+  return `
+    <div class="pub-center" style="justify-content:flex-start;padding-top:12px">
+      <div class="pub-label" style="color:var(--cyan)">🏁 Resultado da bateria</div>
+      <div class="pub-heat-name">${escapeHtml(provaHeaderLabel(heat))}</div>
+      <div class="pub-heat-type">${heatTypeLabel(heat)}</div>
+      ${heat.result_snapshot && snapshotLabel(heat.result_snapshot.status) ? `<div class="pub-label">${escapeHtml(snapshotLabel(heat.result_snapshot.status))}</div>` : ""}
+      ${podium(heat)}
+      <div class="pub-result-table" style="width:100%;max-width:1100px;margin-top:8px">
+        ${compactTable(heat)}
+      </div>
+      ${footer()}
     </div>`;
 }
 
@@ -739,6 +934,12 @@ function reconcile() {
   if (active) return setState(3, { heatId: active.id });
   const ready = heats().find((heat) => heat.status === "ready_check");
   if (ready) return setState(2, { heatId: ready.id });
+  if (
+    presentationConfig().enabled &&
+    eligiblePresentationSlides(eventData).length
+  ) {
+    return resumeIdle();
+  }
   if (allFinished()) return setState(6, { heatId: null });
   const last = lastFinished();
   if (last && nextScheduledAfter(last.event_seq)) {
@@ -777,7 +978,6 @@ async function refreshEvent() {
   try {
     eventData = await api("GET", `/api/events/${eventId}`);
     await loadTheme();
-    updateQr();
     await refreshClassifications();
     reconcile();
   } catch (error) {
@@ -866,13 +1066,22 @@ const ws = new WSClient(wsUrl(), (message) => {
       applyTheme(message.payload);
       renderState(false);
     }
-  } else if (message.type === "settings_updated") {
+  } else if (message.type === "presentation_updated") {
     if (eventData) {
-      eventData.public_results_enabled =
-        message.payload.public_results_enabled;
+      eventData.presentation = message.payload;
+      if (state === 8) {
+        slideIndex = 0;
+        advanceSlide();
+      } else if ([1, 5, 6].includes(state)) {
+        resumeIdle();
+      } else {
+        renderState(false);
+      }
+    }
+  } else if (message.type === "settings_updated") {
+    if (eventData && message.payload.public_name_mode) {
       eventData.public_name_mode = message.payload.public_name_mode;
     }
-    updateQr();
     renderState(false);
   } else if (message.type === "error") {
     console.warn("WS:", message.message);
@@ -909,7 +1118,6 @@ window.addEventListener("message", (event) => {
 
 async function loadSelection() {
   els.overlay.hidden = true;
-  if (els.qr) els.qr.hidden = true;
   try {
     const all = await api("GET", "/api/events");
     events = all.filter((event) => event.status !== "finished");
@@ -932,9 +1140,9 @@ async function init() {
     return;
   }
   await loadTheme();
-  updateQr();
   await refreshClassifications();
   reconcile();
+  ws.subscribe(eventId, { public: true });
   ws.connect();
 }
 

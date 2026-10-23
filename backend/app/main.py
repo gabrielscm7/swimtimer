@@ -13,12 +13,12 @@ from .routers import (
     heats,
     lanes,
     provas,
-    public,
     system,
     teams,
     ws,
 )
 from .services.backup import backup_service
+from .services.marathon import marathon_service
 
 
 @asynccontextmanager
@@ -27,14 +27,16 @@ async def lifespan(app: FastAPI):
     settings.theme_dir.mkdir(parents=True, exist_ok=True)
     await init_db()
     await backup_service.start()
+    await marathon_service.start()
     try:
         yield
     finally:
+        await marathon_service.stop()
         await backup_service.stop()
         await engine.dispose()
 
 
-app = FastAPI(title="SwimTimer", version="2.4.0", lifespan=lifespan)
+app = FastAPI(title="SwimTimer", version="2.6.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -52,7 +54,6 @@ app.include_router(provas.router)
 app.include_router(heats.router)
 app.include_router(lanes.router)
 app.include_router(exports.router)
-app.include_router(public.router)
 app.include_router(ws.router)
 
 

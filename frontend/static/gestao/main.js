@@ -48,6 +48,10 @@ import {
 
 async function loadEvent() {
   state.eventData = await api("GET", `/api/events/${eventId}`);
+  const resultsLink = document.getElementById("nav-resultados");
+  if (resultsLink) {
+    resultsLink.href = `resultados.html?event=${encodeURIComponent(eventId)}`;
+  }
   const theme = await api("GET", `/api/events/${eventId}/theme`);
   state.theme = window.ThemeLogic.normalizeTheme(theme);
   if (!state.themeForm || !state.themeDirty) {
@@ -129,7 +133,7 @@ els.main.addEventListener("click", (event) => {
     else state.expanded.add(id);
     renderHeats();
   } else if (action === "save-lane") {
-    saveLane(Number(target.dataset.heat), Number(target.dataset.lane), target);
+    saveLane(target.dataset.heat, Number(target.dataset.lane), target);
   } else if (action === "save-all-lanes") {
     saveAllLanes(target.dataset.heat, target);
   } else if (action === "classification") {
@@ -300,7 +304,16 @@ const ws = new WSClient(wsUrl(), (message) => {
 });
 
 
-ws.onStatusChange = () => {};
+ws.onStatusChange = (connected) => {
+  if (connected && state.eventData) {
+    loadEvent().catch((error) =>
+      showToast(
+        `Erro ao atualizar evento: ${GestaoLogic.gestaoErrorMessage(error)}`,
+        true
+      )
+    );
+  }
+};
 
 
 loadEvent().catch((error) => {
@@ -312,4 +325,5 @@ loadEvent().catch((error) => {
 });
 
 
+ws.subscribe(eventId);
 ws.connect();

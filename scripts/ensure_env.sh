@@ -19,7 +19,6 @@ if [ -f "$EXAMPLE_FILE" ]; then
 else
   cat > "$ENV_FILE" <<'EOF'
 DATABASE_URL=sqlite+aiosqlite:///./data/swimtimer.db
-RESET_PASSWORD=maratona2025
 EOF
   echo "📝 .env gerado com valores padrão (.env.example ausente)."
 fi

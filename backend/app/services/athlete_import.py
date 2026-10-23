@@ -36,13 +36,23 @@ def _parse_csv_rows(data: bytes) -> list[list[object]]:
     return [row for row in reader]
 
 
-def _parse_xlsx_rows(data: bytes) -> list[list[object]]:
+def _parse_xlsx_rows(
+    data: bytes, max_rows: int | None = None
+) -> list[list[object]]:
     workbook = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
     try:
         sheet = workbook.active
         if sheet is None:
             return []
-        return [list(row) for row in sheet.iter_rows(values_only=True)]
+        rows: list[list[object]] = []
+        for row in sheet.iter_rows(values_only=True):
+            rows.append(list(row))
+            # Margem para cabecalho em qualquer uma das 20 primeiras linhas.
+            if max_rows is not None and len(rows) > max_rows + 20:
+                raise HTTPException(
+                    status_code=413, detail="planilha_muito_grande"
+                )
+        return rows
     finally:
         workbook.close()
 

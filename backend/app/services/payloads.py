@@ -13,7 +13,8 @@ from ..models import (
     Team,
 )
 from ..schemas import compute_speed, format_race_time
-from .snapshots import snapshot_summary
+from . import presentation
+from .snapshots import latest_by_heat, snapshot_summary
 
 
 async def _team_map(session: AsyncSession, event_id: str) -> dict[str, dict]:
@@ -288,10 +289,10 @@ async def _provas_payload(
 ) -> list[dict]:
     if not provas:
         return []
-    event_id = provas[0].event_id
+    prova_ids = [prova.id for prova in provas]
     result = await session.execute(
         select(Heat)
-        .where(Heat.event_id == event_id)
+        .where(Heat.prova_id.in_(prova_ids))
         .order_by(Heat.order_num)
     )
     heats = list(result.scalars().all())
@@ -430,6 +431,7 @@ async def _prova_summary_payload(
     heats = await _prova_heats(session, prova.id)
     sequences = await _heat_sequences(session, {prova.event_id})
     classification = await _classification_payload(session, prova)
+    latest = await latest_by_heat(session, prova.event_id)
     finished = sum(1 for heat in heats if heat.status == "finished")
     return {
         "id": prova.id,
@@ -464,6 +466,7 @@ async def _prova_summary_payload(
                 "status": heat.status,
                 "started_at": heat.started_at,
                 "finished_at": heat.finished_at,
+                "result_snapshot": snapshot_summary(latest.get(heat.id)),
             }
             for heat in heats
         ],
@@ -474,8 +477,38 @@ async def _prova_summary_payload(
             "standings": classification["standings"],
             "standings_by_naipe": classification["standings_by_naipe"],
             "excluded": classification["excluded"],
+            "battery_results": classification["battery_results"],
         },
     }
+
+
+async def _sync_event_status(
+    session: AsyncSession, event_id: str
+) -> tuple[bool, bool]:
+    """Atualiza event.status a partir das baterias.
+
+    Retorna (mudou, virou_finished). O chamador deve commitar quando mudou.
+    """
+    event = await session.get(Event, event_id)
+    if event is None:
+        return False, False
+    result = await session.execute(
+        select(Heat.status).where(Heat.event_id == event_id)
+    )
+    statuses = list(result.scalars().all())
+    if not statuses:
+        return False, False
+    if all(status == "finished" for status in statuses):
+        value = "finished"
+    elif any(status != "scheduled" for status in statuses):
+        value = "active"
+    else:
+        value = "draft"
+    became_finished = value == "finished" and event.status != "finished"
+    changed = event.status != value
+    if changed:
+        event.status = value
+    return changed, became_finished
 
 
 async def _sync_prova_status(session: AsyncSession, prova_id: str) -> None:
@@ -513,6 +546,9 @@ async def _event_payload(
         "status": event.status,
         "public_results_enabled": bool(event.public_results_enabled),
         "public_name_mode": event.public_name_mode,
+        "presentation": presentation.normalize_presentation(
+            event.presentation_json
+        ),
         "created_at": event.created_at,
         "provas": [
             {
@@ -546,6 +582,111 @@ async def _event_payload(
             for team in result.scalars().all()
         ]
     return payload
+
+
+async def _results_tree_payload(
+    session: AsyncSession, event: Event
+) -> dict:
+    """Arvore leve para a pagina interna (sem nomes/raias completas)."""
+    result = await session.execute(
+        select(Prova)
+        .where(Prova.event_id == event.id)
+        .order_by(Prova.order_num)
+    )
+    provas = list(result.scalars().all())
+    result = await session.execute(
+        select(Heat)
+        .where(Heat.event_id == event.id)
+        .order_by(Heat.order_num)
+    )
+    heats = list(result.scalars().all())
+    heat_ids = [heat.id for heat in heats]
+
+    lane_stats: dict[str, dict[str, int]] = {}
+    if heat_ids:
+        rows = await session.execute(
+            select(HeatLane.heat_id, HeatLane.status, func.count())
+            .where(HeatLane.heat_id.in_(heat_ids))
+            .group_by(HeatLane.heat_id, HeatLane.status)
+        )
+        for heat_id, status, count in rows.all():
+            lane_stats.setdefault(heat_id, {})[status] = count
+
+    latest = await latest_by_heat(session, event.id) if heats else {}
+    sequences = await _heat_sequences(session, {event.id})
+
+    heat_payloads: list[dict] = []
+    for heat in heats:
+        stats = lane_stats.get(heat.id, {})
+        sequence = sequences.get(heat.id, {})
+        heat_payloads.append(
+            {
+                "id": heat.id,
+                "prova_id": heat.prova_id,
+                "name": heat.name,
+                "order_num": heat.order_num,
+                "event_seq": sequence.get("event_seq"),
+                "heat_index_in_prova": sequence.get("heat_index_in_prova"),
+                "heats_in_prova": sequence.get("heats_in_prova"),
+                "heat_type": heat.heat_type,
+                "distance_m": heat.distance_m,
+                "duration_s": heat.duration_s,
+                "status": heat.status,
+                "started_at": heat.started_at,
+                "finished_at": heat.finished_at,
+                "lane_count": sum(stats.values()),
+                "finished_count": stats.get("finished", 0),
+                "dq_count": stats.get("dq", 0),
+                "result_snapshot": snapshot_summary(latest.get(heat.id)),
+            }
+        )
+
+    heats_by_prova: dict[str, list[dict]] = {}
+    for heat in heat_payloads:
+        heats_by_prova.setdefault(heat["prova_id"], []).append(heat)
+
+    prova_payloads = []
+    for prova in provas:
+        prova_heats = heats_by_prova.get(prova.id, [])
+        prova_payloads.append(
+            {
+                "id": prova.id,
+                "event_id": prova.event_id,
+                "name": prova.name,
+                "order_num": prova.order_num,
+                "stroke": prova.stroke,
+                "distance_m": prova.distance_m,
+                "category": prova.category,
+                "naipe": prova.naipe,
+                "mixed_ranking": prova.mixed_ranking,
+                "consolidate_results": prova.consolidate_results,
+                "classification_criterion": prova.classification_criterion,
+                "status": prova.status,
+                "heat_count": len(prova_heats),
+                "heats_finished": sum(
+                    1
+                    for heat in prova_heats
+                    if heat["status"] == "finished"
+                ),
+                "heats": prova_heats,
+            }
+        )
+
+    return {
+        "event": {
+            "id": event.id,
+            "name": event.name,
+            "location": event.location,
+            "date": event.date,
+            "pool_length_m": event.pool_length_m,
+            "status": event.status,
+            "public_name_mode": event.public_name_mode,
+        },
+        "presentation": presentation.normalize_presentation(
+            event.presentation_json
+        ),
+        "provas": prova_payloads,
+    }
 
 
 def _participant_lanes(lanes: list[HeatLane]) -> list[HeatLane]:

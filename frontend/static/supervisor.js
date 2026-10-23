@@ -23,6 +23,11 @@ if (!eventId) {
   window.location.replace("index.html");
 }
 
+const resultsLink = document.getElementById("sup-results-link");
+if (resultsLink) {
+  resultsLink.href = `resultados.html?event=${encodeURIComponent(eventId)}`;
+}
+
 const els = {
   eventName: document.getElementById("sup-event-name"),
   eventStatus: document.getElementById("sup-event-status"),
@@ -751,6 +756,7 @@ async function init() {
     window.location.replace("index.html");
     return;
   }
+  ws.subscribe(eventId);
   ws.connect();
   setInterval(refreshBackupStatus, 30000);
 }

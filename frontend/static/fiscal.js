@@ -103,6 +103,14 @@ function clearSelection() {
   localStorage.removeItem(STORAGE_KEY);
 }
 
+function syncSubscription() {
+  if (selection && selection.event_id) {
+    ws.subscribe(selection.event_id);
+  } else {
+    ws.subscribe(null);
+  }
+}
+
 function outboxLoad() {
   try {
     return JSON.parse(localStorage.getItem(OUTBOX_KEY) || "[]");
@@ -458,6 +466,7 @@ function confirmPosition() {
     participant_name: lane.participant_name,
   };
   saveSelection();
+  syncSubscription();
   currentHeat = configHeat;
   eventDetail = configEvent;
   readyInfo = null;
@@ -475,6 +484,7 @@ function changeLane() {
   configHeat = null;
   configEventId = null;
   selectedLaneId = null;
+  syncSubscription();
   show("config");
   loadEvents();
 }
@@ -894,6 +904,7 @@ function nextBattery() {
   selection.lane_number = lane.lane_number;
   selection.participant_name = lane.participant_name;
   saveSelection();
+  syncSubscription();
   currentHeat = next;
   readyInfo = null;
   applyState({ buzzer: false });
@@ -925,6 +936,7 @@ async function reconcile(options = {}) {
   const saved = loadSelection();
   if (!saved || !saved.event_id || !saved.lane_id) {
     selection = null;
+    syncSubscription();
     show("config");
     await loadEvents();
     return;
@@ -939,6 +951,7 @@ async function reconcile(options = {}) {
     if (!heat) {
       clearSelection();
       selection = null;
+      syncSubscription();
       currentHeat = null;
       eventDetail = null;
       show("config");
@@ -954,6 +967,7 @@ async function reconcile(options = {}) {
       participant_name: lane.participant_name,
     };
     saveSelection();
+    syncSubscription();
     eventDetail = event;
     currentHeat = heat;
     ensureAudio();
@@ -962,6 +976,7 @@ async function reconcile(options = {}) {
   } catch (error) {
     setOffline(true);
     if (!selection) selection = saved;
+    syncSubscription();
     show("config");
     await loadEvents();
   } finally {
@@ -1020,5 +1035,9 @@ if (els.rejectedClear) {
 }
 
 renderRejected();
+const savedSelection = loadSelection();
+if (savedSelection && savedSelection.event_id) {
+  ws.subscribe(savedSelection.event_id);
+}
 reconcile().catch(() => {});
 ws.connect();

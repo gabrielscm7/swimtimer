@@ -36,6 +36,7 @@ class Event(Base):
         String, default="full", nullable=False, server_default=text("'full'")
     )
     theme_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    presentation_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[float] = mapped_column(Float, nullable=False)
 
     teams: Mapped[list["Team"]] = relationship(

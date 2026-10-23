@@ -2,7 +2,7 @@ import { api } from "../common/api.js";
 import { escapeHtml } from "../common/format.js";
 import { showFeedback, showToast } from "../common/ui.js";
 import { isOverrideError, promptSupervisorOverride } from "./override.js";
-import { els, state } from "./state.js";
+import { els, eventId, state } from "./state.js";
 import {
   refresh,
   renderAll,

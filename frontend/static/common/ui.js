@@ -50,6 +50,7 @@ export const STATUS_LABELS = {
   active: "Em andamento",
   finished: "Encerrado",
   scheduled: "Agendada",
+  in_progress: "Em andamento",
   ready_check: "Chamada",
   assigned: "Aguardando",
   ready: "Pronta",

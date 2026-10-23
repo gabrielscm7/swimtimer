@@ -1,7 +1,7 @@
 import { api } from "../common/api.js";
 import { escapeHtml } from "../common/format.js";
 import { showToast, statusLabel } from "../common/ui.js";
-import { els, state } from "./state.js";
+import { els, eventId, state } from "./state.js";
 import {
   heatDistanceText,
   heatsOfProva,
@@ -110,17 +110,13 @@ function renderSettings() {
       <div class="field-error" id="set-error" hidden></div>
     </div>
     <div class="panel">
-      <h2>Resultados públicos</h2>
-      <label class="checkbox-row">
-        <input type="checkbox" id="set-public-enabled" ${state.eventData.public_results_enabled !== false ? "checked" : ""} />
-        Publicar página de resultados e endpoints públicos
-      </label>
+      <h2>Exibição no telão</h2>
       <div class="radio-row" style="margin-top:12px">
         <label><input type="radio" name="set-name-mode" value="full" ${state.eventData.public_name_mode !== "initials" ? "checked" : ""} /> Nome completo</label>
         <label><input type="radio" name="set-name-mode" value="initials" ${state.eventData.public_name_mode === "initials" ? "checked" : ""} /> Iniciais (Maria S.)</label>
       </div>
-      <p class="muted">O modo de iniciais afeta apenas a TV e a página pública. Súmulas, exportações, snapshots e a gestão mantêm o nome completo.</p>
-      <button class="primary" data-action="save-settings">Salvar privacidade</button>
+      <p class="muted">O modo de iniciais afeta apenas a TV. Súmulas, exportações, snapshots e a gestão mantêm o nome completo. A curadoria de resultados fica em <a href="resultados.html?event=${eventId}">Resultados</a>.</p>
+      <button class="primary" data-action="save-settings">Salvar exibição</button>
       <div class="field-error" id="set-public-error" hidden></div>
     </div>
     <div class="panel" id="appearance-panel"></div>
@@ -135,7 +131,6 @@ function renderSettings() {
 
 async function saveSettings(button) {
   const pool = document.querySelector('input[name="set-pool"]:checked');
-  const publicEnabled = document.getElementById("set-public-enabled");
   const nameMode = document.querySelector(
     'input[name="set-name-mode"]:checked'
   );
@@ -144,9 +139,6 @@ async function saveSettings(button) {
     location: document.getElementById("set-location").value.trim() || null,
     date: document.getElementById("set-date").value || null,
     pool_length_m: pool ? Number(pool.value) : state.eventData.pool_length_m,
-    public_results_enabled: publicEnabled
-      ? publicEnabled.checked
-      : state.eventData.public_results_enabled !== false,
     public_name_mode: nameMode
       ? nameMode.value
       : state.eventData.public_name_mode || "full",

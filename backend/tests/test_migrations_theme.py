@@ -51,3 +51,35 @@ def test_migration_adds_and_removes_theme_json(tmp_path, monkeypatch):
 
     command.downgrade(config, "0011_event_public_settings")
     assert "theme_json" not in _event_columns(db)
+
+
+def test_migration_adds_and_removes_presentation_json(tmp_path, monkeypatch):
+    db = tmp_path / "presentation_migration.db"
+    monkeypatch.setattr(
+        settings, "DATABASE_URL", f"sqlite+aiosqlite:///{db}"
+    )
+    config = _alembic_config()
+
+    command.upgrade(config, "0012_event_theme")
+    assert "presentation_json" not in _event_columns(db)
+
+    con = sqlite3.connect(db)
+    con.execute(
+        "INSERT INTO event (id, name, pool_length_m, status, created_at) "
+        "VALUES ('e1', 'Evento', 25, 'draft', 0)"
+    )
+    con.commit()
+    con.close()
+
+    command.upgrade(config, "head")
+    assert "presentation_json" in _event_columns(db)
+
+    con = sqlite3.connect(db)
+    value = con.execute(
+        "SELECT presentation_json FROM event WHERE id='e1'"
+    ).fetchone()[0]
+    con.close()
+    assert value is None
+
+    command.downgrade(config, "0012_event_theme")
+    assert "presentation_json" not in _event_columns(db)

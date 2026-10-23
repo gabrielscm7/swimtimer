@@ -6,6 +6,7 @@ const OVERRIDE_CODES = new Set([
   "atleta_duplicado_na_bateria",
   "atleta_duplicado_na_prova",
   "atleta_em_outra_bateria_ativa",
+  "atleta_com_resultado",
 ]);
 
 function overrideCode(error) {

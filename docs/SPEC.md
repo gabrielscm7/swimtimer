@@ -330,6 +330,21 @@ DELETE /api/lanes/{lane_id}/lap/last  → desfazer última volta (maratona, < 30
 - Volta repetida na mesma raia a menos de `MIN_LAP_INTERVAL_S` (padrão 5 s)
   retorna `409 volta_duplicada`.
 
+### Resultados internos e apresentação
+```
+GET    /api/events/{event_id}/results        → árvore prova → bateria (leve)
+GET    /api/events/{event_id}/presentation   → curadoria normalizada/hidratada
+PUT    /api/events/{event_id}/presentation   → salvar curadoria
+GET    /api/heats/{heat_id}/snapshots        → histórico de revisões
+```
+
+A curadoria é persistida em `event.presentation_json`:
+`enabled`, `rotation`, `slide_duration_s`, `show_next_prova`, `pinned_ref` e
+`slides` (`prova|bateria` + `target_id`). O telão prioriza a prova ao vivo e,
+sem prova ao vivo, exibe os slides elegíveis; o rodapé de “próxima prova” é
+opcional. A página interna (`resultados.html`) usa a árvore, o summary da prova
+e o histórico de snapshots.
+
 ### Admin
 ```
 GET    /api/time                      → {now: <epoch do servidor>}
@@ -383,7 +398,16 @@ prontidão e controle da prova usam REST.
 {
   "type": "athletes_changed",
   "scope": "event",
+  "event_id": "uuid",
   "payload": { "event_id": "uuid" }
+}
+
+// Curadoria do telão alterada
+{
+  "type": "presentation_updated",
+  "scope": "event",
+  "event_id": "uuid",
+  "payload": { "enabled": true, "slides": [/* ... */] }
 }
 
 // Situação de prontidão das raias

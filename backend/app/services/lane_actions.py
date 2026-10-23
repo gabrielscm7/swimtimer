@@ -15,8 +15,13 @@ from ..schemas import compute_speed, format_race_time
 from . import snapshots
 from .backup import backup_service
 from .broadcast import _broadcast_heat, _broadcast_server_status
-from .journal import append as journal_append
-from .payloads import _heat_lanes, _participant_lanes, _sync_prova_status
+from .journal import queue as journal_queue
+from .payloads import (
+    _heat_lanes,
+    _participant_lanes,
+    _sync_event_status,
+    _sync_prova_status,
+)
 
 # Âncora monotônica por bateria: (monotonic_no_início, wall_no_início).
 # Usada para medir duração de toques sem client_ts, imune a ajustes de relógio.
@@ -83,13 +88,19 @@ def _client_ip(request: Request | None) -> str | None:
 
 
 async def _cached_op_result(
-    session: AsyncSession, op_id: str | None
+    session: AsyncSession,
+    op_id: str | None,
+    *,
+    lane_id: str,
+    action: str,
 ) -> dict | None:
     if not op_id:
         return None
     row = await session.get(ProcessedOp, op_id)
     if row is None:
         return None
+    if (row.lane_id and row.lane_id != lane_id) or row.action != action:
+        raise LaneActionError(409, "op_id_conflitante")
     try:
         return json.loads(row.result_json)
     except (TypeError, ValueError):
@@ -145,7 +156,8 @@ def _log_action(
         ),
     )
     session.add(entry)
-    journal_append(
+    journal_queue(
+        session,
         event_id,
         {
             "kind": "action_log",
@@ -211,7 +223,9 @@ async def _do_finish(
         lane = await session.get(HeatLane, lane_id)
         if lane is None:
             raise LaneActionError(404, "raia_nao_encontrada")
-        cached = await _cached_op_result(session, op_id)
+        cached = await _cached_op_result(
+            session, op_id, lane_id=lane.id, action="finish"
+        )
         if cached is not None:
             return cached
         heat = await session.get(Heat, heat_id)
@@ -219,6 +233,10 @@ async def _do_finish(
             raise LaneActionError(404, "bateria_nao_encontrada")
         if heat.heat_type != "bateria":
             raise LaneActionError(400, "nao_e_bateria")
+        if lane.status == "dq":
+            raise LaneActionError(409, "raia_desclassificada")
+        if not (lane.participant_name or lane.athlete_id or lane.team_id):
+            raise LaneActionError(409, "raia_sem_participante")
         if lane.finish_at is not None:
             raise LaneActionError(409, "ja_finalizou")
         if heat.status != "active":
@@ -278,11 +296,19 @@ async def _do_finish(
         )
         await session.commit()
         await session.refresh(lane)
+        changed, became_finished = await _sync_event_status(
+            session, heat.event_id
+        )
+        if changed:
+            await session.commit()
 
         await _broadcast_heat(session, heat)
         if all_finished:
             await _broadcast_server_status()
-            backup_service.schedule_after_finish(heat.event_id)
+            if became_finished:
+                await backup_service.backup_now(heat.event_id, kind="final")
+            else:
+                backup_service.schedule_after_finish(heat.event_id)
 
         return result
 
@@ -305,7 +331,9 @@ async def _do_lap(
         lane = await session.get(HeatLane, lane_id)
         if lane is None:
             raise LaneActionError(404, "raia_nao_encontrada")
-        cached = await _cached_op_result(session, op_id)
+        cached = await _cached_op_result(
+            session, op_id, lane_id=lane.id, action="lap"
+        )
         if cached is not None:
             return cached
         heat = await session.get(Heat, heat_id)
@@ -313,6 +341,10 @@ async def _do_lap(
             raise LaneActionError(404, "bateria_nao_encontrada")
         if heat.heat_type != "maratona":
             raise LaneActionError(400, "nao_e_maratona")
+        if lane.status == "dq":
+            raise LaneActionError(409, "raia_desclassificada")
+        if not (lane.participant_name or lane.athlete_id or lane.team_id):
+            raise LaneActionError(409, "raia_sem_participante")
         if heat.status != "active":
             raise LaneActionError(400, "bateria_nao_ativa")
 

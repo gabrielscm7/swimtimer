@@ -16,6 +16,14 @@ from .backup import _copy_database, db_file_path
 from .payloads import _classification_payload, _prova_heats
 from .snapshots import latest_by_heat, snapshot_summary
 
+def csv_safe(value: object) -> str:
+    """Evita que dados do usuario sejam interpretados como formula no Excel."""
+    text = "" if value is None else str(value)
+    if text.startswith(("=", "+", "-", "@", "\t", "\r")):
+        return "'" + text
+    return text
+
+
 CSV_HEADER = [
     "prova",
     "bateria",
@@ -83,15 +91,15 @@ async def build_results_csv(session: AsyncSession, event: Event) -> str:
     for row in rows:
         writer.writerow(
             [
-                row["prova"],
-                row["bateria"],
-                row["raia"],
-                row["atleta"],
-                row["equipe"],
-                row["tempo"],
-                row["status"],
-                row["revisao"],
-                row["oficial"],
+                csv_safe(row["prova"]),
+                csv_safe(row["bateria"]),
+                csv_safe(row["raia"]),
+                csv_safe(row["atleta"]),
+                csv_safe(row["equipe"]),
+                csv_safe(row["tempo"]),
+                csv_safe(row["status"]),
+                csv_safe(row["revisao"]),
+                csv_safe(row["oficial"]),
             ]
         )
     return "\ufeff" + buffer.getvalue()

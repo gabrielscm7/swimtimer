@@ -18,7 +18,8 @@ Siga esta sequência. Tempo estimado do passo 1 ao sistema pronto: **5 minutos**
 Abrir http://10.42.0.1:8080 no notebook → deve carregar a Home
 
 ## 4. Compartilhar acesso com fiscais
-Mostrar o QR Code exibido no terminal
+Mostrar o QR Code exibido pelo `./start.sh` (ele aponta para a página do fiscal,
+não para resultados)
 OU passar a URL: http://10.42.0.1:8080/fiscal.html
 
 ## 5. Encerrar ao fim do evento
@@ -48,7 +49,8 @@ OU passar a URL: http://10.42.0.1:8080/fiscal.html
 
 ### Iniciar a prova
 
-- Na gestão: clique em **Iniciar** → cronômetro começa → fiscais habilitados
+- No supervisor: abra o ready check, aguarde os fiscais e clique em **Iniciar**
+  → cronômetro começa → fiscais habilitados
 
 ### Registrar chegada (fiscal)
 
@@ -58,8 +60,9 @@ OU passar a URL: http://10.42.0.1:8080/fiscal.html
 
 ### Desfazer erro (fiscal)
 
-- Botão **DESFAZER** disponível por 30 segundos após o toque
-- Após 30s: solicitar ao operador-geral via gestão
+- Em maratonas, o botão **DESFAZER** remove a última volta por 30 segundos.
+- Chegadas (`finish`) não podem ser desfeitas pela interface; solicite ao
+  supervisor/gestão uma correção com registro de auditoria.
 
 ### Monitorar conexões
 
@@ -86,28 +89,28 @@ ls -la backend/data/
 
 ---
 
-## Resultados públicos e QR
+## Resultados internos e apresentação do telão
 
-- A TV (`publico.html`) mostra um QR code apontando para
-  `resultados.html?event=<id>`; aponte o celular para ele.
-- A página `resultados.html?event=<id>` é mobile-first: provas → classificação
-  (geral e por naipe) + baterias, com os selos **Oficial**, **Provisório** e
-  **Retificado**, e busca por atleta ou equipe.
-- Atualiza sozinha via WebSocket (e recarrega a cada 10 s como reserva).
-- Nada de `action_log`, IPs ou motivos internos aparece nesses endpoints.
+- Página interna: `resultados.html?event=<id>` (acesso da organização).
+  Navegação por prova → bateria, classificação agregada, detalhe das baterias,
+  selos **Oficial/Provisório/Retificado**, histórico de snapshots, súmula e
+  exportação CSV.
+- Na gestão, o link **📊 Resultados** abre a página já no evento atual.
+- A curadoria fica no painel **Apresentação do telão** da página interna:
+  selecione provas/baterias, reordene, fixe um item, ajuste a duração do slide
+  e ligue/desligue o rodapé de próxima prova.
+- A TV (`publico.html`) sempre prioriza a prova ao vivo (chamada, percurso,
+  resultado e agregado da prova). Sem prova ao vivo, exibe a curadoria.
+- Não há mais QR code nem página pública mobile de resultados.
 
-### Privacidade (opcional, por evento)
+### Modo de nome no telão
 
-Na **Gestão → Resultados públicos**:
+Na **Gestão → Exibição no telão**:
 
-- **Publicar resultados**: liga/desliga a página e os endpoints
-  `/api/public/...` (padrão: ligado). A TV continua funcionando.
-- **Modo de nome**: `Nome completo` (padrão) ou `Iniciais` ("Maria S.").
-  Vale ao vivo (mensagem WS `settings_updated`).
-  Afeta **apenas** a TV e a página pública: súmulas, exportações, diário,
-  snapshots e a gestão mantêm o nome completo.
-- As configurações são somente leitura na página de resultados; a edição é
-  feita na gestão.
+- **Nome completo** (padrão) ou **Iniciais** ("Maria S.").
+- Vale ao vivo pela mensagem WS `settings_updated`.
+- Afeta **apenas** a TV; súmulas, exportações, diário, snapshots e a gestão
+  mantêm o nome completo.
 
 ### CRM/CSV e pacote do evento
 

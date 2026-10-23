@@ -34,6 +34,7 @@ _OVERRIDE_CODES = {
     "atleta_duplicado_na_prova": 409,
     "atleta_duplicado_na_bateria": 409,
     "atleta_em_outra_bateria_ativa": 409,
+    "atleta_com_resultado": 409,
 }
 
 _ACTIVE_HEAT_STATUSES = ("ready_check", "active")
@@ -228,7 +229,17 @@ async def check_athlete_update(
         .where(HeatLane.athlete_id == athlete.id)
     )
     violations: list[dict] = []
+    changed = naipe != athlete.naipe or category != athlete.category
     for _lane, heat, prova in result.all():
+        if changed and heat.status == "finished":
+            violations.append(
+                _violation(
+                    "atleta_com_resultado",
+                    athlete_id=athlete.id,
+                    heat_id=heat.id,
+                    heat_name=heat.name,
+                )
+            )
         if prova.naipe and prova.naipe != "MISTO" and naipe != prova.naipe:
             violations.append(
                 _violation(

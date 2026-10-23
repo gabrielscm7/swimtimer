@@ -156,6 +156,11 @@ def test_ws_sends_prova_state_on_connect(ws_client):
     ws_client.post(f"/api/heats/{heat['id']}/start")
 
     with ws_client.websocket_connect("/ws") as websocket:
+        _recv_of_type(websocket, "server_status")
+        websocket.send_json(
+            {"type": "subscribe", "event_id": event["id"]}
+        )
+        _recv_of_type(websocket, "subscribed")
         state = _recv_matching(
             websocket, "prova_state", "prova_id", prova["id"]
         )
@@ -178,6 +183,11 @@ def test_ws_reconnect_recovers_active_state(ws_client):
     ws_client.post(f"/api/heats/{heat['id']}/start")
 
     with ws_client.websocket_connect("/ws") as websocket:
+        _recv_of_type(websocket, "server_status")
+        websocket.send_json(
+            {"type": "subscribe", "event_id": event["id"]}
+        )
+        _recv_of_type(websocket, "subscribed")
         message = _recv_matching(
             websocket, "heat_state", "heat_id", heat["id"]
         )
@@ -294,3 +304,28 @@ def test_ws_subscribe_unknown_event_errors(ws_client):
         )
         error = _recv_of_type(websocket, "error")
         assert error["message"] == "evento_nao_encontrado"
+
+
+def test_settings_updated_broadcast(ws_client):
+    event = _create_event(ws_client, name="Evento WS settings")
+    with ws_client.websocket_connect("/ws") as websocket:
+        first = websocket.receive_json()
+        assert first["type"] == "server_status"
+        websocket.send_json({"type": "subscribe", "event_id": event["id"]})
+        assert websocket.receive_json()["type"] == "subscribed"
+        response = ws_client.patch(
+            f"/api/events/{event['id']}",
+            json={"public_name_mode": "initials"},
+        )
+        assert response.status_code == 200, response.text
+
+        message = None
+        for _ in range(30):
+            candidate = websocket.receive_json()
+            if candidate.get("type") == "settings_updated":
+                message = candidate
+                break
+        assert message is not None
+        assert message["scope"] == "event"
+        assert message["event_id"] == event["id"]
+        assert message["payload"]["public_name_mode"] == "initials"
