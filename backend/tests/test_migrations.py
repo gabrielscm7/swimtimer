@@ -209,6 +209,117 @@ def test_migration_0005_preserves_legacy_lanes(tmp_path, monkeypatch):
     assert duplicate_blocked, "indice unico de atleta nao foi aplicado"
 
 
+def _create_legacy_heat_data(con):
+    con.execute(
+        "INSERT INTO event (id, name, pool_length_m, status, created_at) "
+        "VALUES ('e1', 'Evento', 25, 'draft', 0)"
+    )
+    con.execute(
+        "INSERT INTO prova (id, event_id, name, order_num, "
+        "consolidate_results, classification_criterion, status, created_at) "
+        "VALUES ('p1', 'e1', 'Prova', 1, 1, 'lowest_time', 'scheduled', 0)"
+    )
+    con.execute(
+        "INSERT INTO heat (id, event_id, prova_id, name, order_num, "
+        "heat_type, status) "
+        "VALUES ('h1', 'e1', 'p1', 'Bateria', 1, 'maratona', 'active')"
+    )
+    con.execute(
+        "INSERT INTO heat_lane (id, heat_id, lane_number, status) "
+        "VALUES ('l1', 'h1', 1, 'active')"
+    )
+    con.execute(
+        "INSERT INTO lap_event (id, lane_id, lap_number, recorded_at, is_undo) "
+        "VALUES ('x1', 'l1', 1, 10.0, 0)"
+    )
+
+
+def test_migration_0007_adds_columns_and_tables(tmp_path, monkeypatch):
+    db = tmp_path / "time_ack.db"
+    monkeypatch.setattr(
+        settings, "DATABASE_URL", f"sqlite+aiosqlite:///{db}"
+    )
+    config = _alembic_config()
+
+    command.upgrade(config, "0006_prova_naipe")
+    con = sqlite3.connect(db)
+    _create_legacy_heat_data(con)
+    con.commit()
+    con.close()
+
+    command.upgrade(config, "head")
+
+    con = sqlite3.connect(db)
+    tables = {
+        row[0]
+        for row in con.execute("SELECT name FROM sqlite_master WHERE type='table'")
+    }
+    assert {"action_log", "processed_op"} <= tables
+
+    lane_columns = {
+        row[1] for row in con.execute("PRAGMA table_info(heat_lane)")
+    }
+    assert {"received_at", "late"} <= lane_columns
+    lap_columns = {
+        row[1] for row in con.execute("PRAGMA table_info(lap_event)")
+    }
+    assert {"received_at", "late"} <= lap_columns
+
+    # Dados legados preservados e novas colunas com default seguro.
+    lane = con.execute(
+        "SELECT received_at, late FROM heat_lane WHERE id='l1'"
+    ).fetchone()
+    assert lane == (None, 0)
+    lap = con.execute(
+        "SELECT recorded_at, received_at, late FROM lap_event WHERE id='x1'"
+    ).fetchone()
+    assert lap == (10.0, None, 0)
+
+    # processed_op: op_id é chave primária.
+    con.execute(
+        "INSERT INTO processed_op (op_id, lane_id, action, result_json, "
+        "created_at) VALUES ('op1', 'l1', 'lap', '{}', 0)"
+    )
+    con.commit()
+    duplicate = False
+    try:
+        con.execute(
+            "INSERT INTO processed_op (op_id, lane_id, action, result_json, "
+            "created_at) VALUES ('op1', 'l1', 'lap', '{}', 1)"
+        )
+        con.commit()
+    except sqlite3.IntegrityError:
+        duplicate = True
+    finally:
+        con.close()
+    assert duplicate, "processed_op.op_id deveria ser unico"
+
+
+def test_migration_0007_downgrade_removes_schema(tmp_path, monkeypatch):
+    db = tmp_path / "time_ack_down.db"
+    monkeypatch.setattr(
+        settings, "DATABASE_URL", f"sqlite+aiosqlite:///{db}"
+    )
+    config = _alembic_config()
+
+    command.upgrade(config, "head")
+    command.downgrade(config, "0006_prova_naipe")
+
+    con = sqlite3.connect(db)
+    tables = {
+        row[0]
+        for row in con.execute("SELECT name FROM sqlite_master WHERE type='table'")
+    }
+    assert "action_log" not in tables
+    assert "processed_op" not in tables
+    lane_columns = {
+        row[1] for row in con.execute("PRAGMA table_info(heat_lane)")
+    }
+    assert "received_at" not in lane_columns
+    assert "late" not in lane_columns
+    con.close()
+
+
 def test_migration_0006_backfills_prova_naipe(tmp_path, monkeypatch):
     db = tmp_path / "legacy_naipe.db"
     monkeypatch.setattr(

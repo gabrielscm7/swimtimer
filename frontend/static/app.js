@@ -5,8 +5,10 @@ class WSClient {
     this.ws = null;
     this.attempts = 0;
     this.onStatusChange = null;
-    this._delays = [1000, 2000, 4000, 8000, 30000];
+    this._delays = [500, 1000, 2000, 3000, 5000];
     this._reconnectTimer = null;
+    this._heartbeat = null;
+    this._pongTimer = null;
   }
 
   connect() {
@@ -32,18 +34,29 @@ class WSClient {
 
     this.ws.onopen = () => {
       this.attempts = 0;
+      syncServerClock();
       this._status(true);
+      this._startHeartbeat();
     };
 
     this.ws.onmessage = (event) => {
       try {
-        this.onMessage(JSON.parse(event.data));
+        const message = JSON.parse(event.data);
+        if (message && message.type === "pong") {
+          if (this._pongTimer) {
+            clearTimeout(this._pongTimer);
+            this._pongTimer = null;
+          }
+          return;
+        }
+        this.onMessage(message);
       } catch (error) {
         console.error("Mensagem inválida", error);
       }
     };
 
     this.ws.onclose = () => {
+      this._stopHeartbeat();
       this._status(false);
       this._scheduleReconnect();
     };
@@ -63,6 +76,41 @@ class WSClient {
       return true;
     }
     return false;
+  }
+
+  _startHeartbeat() {
+    this._stopHeartbeat();
+    this._heartbeat = setInterval(() => this._ping(), 5000);
+  }
+
+  _stopHeartbeat() {
+    if (this._heartbeat) {
+      clearInterval(this._heartbeat);
+      this._heartbeat = null;
+    }
+    if (this._pongTimer) {
+      clearTimeout(this._pongTimer);
+      this._pongTimer = null;
+    }
+  }
+
+  _ping() {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    // Sem pong em 3 s: fecha o socket; onclose agenda a reconexão.
+    if (this._pongTimer) clearTimeout(this._pongTimer);
+    this._pongTimer = setTimeout(() => {
+      this._pongTimer = null;
+      try {
+        this.ws.close();
+      } catch (error) {
+        /* noop */
+      }
+    }, 3000);
+    try {
+      this.ws.send(JSON.stringify({ type: "ping" }));
+    } catch (error) {
+      /* noop */
+    }
   }
 
   _scheduleReconnect() {
@@ -262,7 +310,64 @@ function pluralize(count, singular, plural) {
   return `${count} ${count === 1 ? singular : plural || singular + "s"}`;
 }
 
+// --------------------------------------------------------------------------- //
+// Relógio do servidor (base de tempo para client_ts, cronômetros e janelas)
+// --------------------------------------------------------------------------- //
+const _clockState = { offset: 0, synced: false };
+let _clockSyncing = false;
+
+function serverNow() {
+  return Date.now() / 1000 + _clockState.offset;
+}
+
+async function _timeSample() {
+  const t0 = Date.now();
+  const response = await fetch("/api/time", { cache: "no-store" });
+  const t1 = Date.now();
+  if (!response.ok) throw new Error("time_sync_failed");
+  const body = await response.json();
+  const offset =
+    typeof ClockLogic !== "undefined"
+      ? ClockLogic.sampleOffset(body.now, t0, t1)
+      : body.now - (t0 + t1) / 2000;
+  return { rtt: t1 - t0, offset };
+}
+
+async function syncServerClock() {
+  if (_clockSyncing) return;
+  _clockSyncing = true;
+  try {
+    const samples = [];
+    for (let index = 0; index < 3; index += 1) {
+      try {
+        samples.push(await _timeSample());
+      } catch (error) {
+        /* amostra falhou: tenta a próxima */
+      }
+    }
+    let best = null;
+    if (typeof ClockLogic !== "undefined") {
+      best = ClockLogic.pickBestSample(samples);
+    } else if (samples.length) {
+      best = samples.reduce((a, b) => (b.rtt < a.rtt ? b : a));
+    }
+    if (best) {
+      _clockState.offset = best.offset;
+      _clockState.synced = true;
+    }
+  } finally {
+    _clockSyncing = false;
+  }
+}
+
+setInterval(() => {
+  syncServerClock();
+}, 30000);
+syncServerClock();
+
 window.WSClient = WSClient;
+window.serverNow = serverNow;
+window.syncServerClock = syncServerClock;
 window.formatClock = formatClock;
 window.formatRaceTime = formatRaceTime;
 window.formatTenths = formatTenths;

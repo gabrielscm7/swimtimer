@@ -1,11 +1,18 @@
 const STORAGE_KEY = "swimtimer_fiscal";
 const OUTBOX_KEY = "swimtimer_fiscal_outbox";
+const REJECTED_KEY = "swimtimer_fiscal_rejeitados";
 const UNDO_WINDOW_MS = 30000;
+const ACK_TIMEOUT_MS = 3000;
+const REGISTER_GUARD_MS = 12000;
 
 const { isTerminalError, applyLaneUpdate } = window.FiscalLogic;
+const { newOpId } = window.ClockLogic;
 
 const els = {
   offlineBanner: document.getElementById("offline-banner"),
+  rejectedBanner: document.getElementById("rejected-banner"),
+  rejectedList: document.getElementById("rejected-list"),
+  rejectedClear: document.getElementById("rejected-clear"),
   hdrEvent: document.getElementById("hdr-event"),
   hdrDot: document.getElementById("hdr-dot"),
   // Tela 1
@@ -101,12 +108,67 @@ function outboxSave(items) {
   localStorage.setItem(OUTBOX_KEY, JSON.stringify(items));
 }
 
-function enqueue(item) {
+function outboxAdd(item) {
   const queue = outboxLoad();
-  queue.push({ ...item, ts: Date.now() });
+  queue.push({ ...item, ts: item.ts || Date.now() });
   outboxSave(queue);
+}
+
+function outboxRemove(opId) {
+  if (!opId) return;
+  outboxSave(outboxLoad().filter((item) => item.op_id !== opId));
+}
+
+function enqueue(item) {
+  outboxAdd(item);
   setOffline(true);
   showToast("Sem conexão — registro em fila", true);
+}
+
+// --------------------------------------------------------------------------- //
+// Registros rejeitados (4xx): visíveis, nunca descartados em silêncio
+// --------------------------------------------------------------------------- //
+function rejectedLoad() {
+  try {
+    return JSON.parse(localStorage.getItem(REJECTED_KEY) || "[]");
+  } catch (error) {
+    return [];
+  }
+}
+
+function rejectedSave(items) {
+  localStorage.setItem(REJECTED_KEY, JSON.stringify(items));
+}
+
+function recordRejected(item, motivo) {
+  const items = rejectedLoad();
+  items.push({
+    op_id: item.op_id,
+    action: item.action,
+    lane_id: item.lane_id,
+    motivo,
+    ts: Date.now(),
+  });
+  rejectedSave(items);
+  renderRejected();
+}
+
+function renderRejected() {
+  if (!els.rejectedBanner || !els.rejectedList) return;
+  const items = rejectedLoad();
+  els.rejectedBanner.hidden = items.length === 0;
+  els.rejectedList.innerHTML = "";
+  for (const item of items.slice(-10)) {
+    const line = document.createElement("li");
+    const when = new Date(item.ts || Date.now()).toLocaleTimeString();
+    line.textContent = `${when} · ${item.action || "registro"} · ${item.motivo}`;
+    els.rejectedList.appendChild(line);
+  }
+}
+
+function clearRejected() {
+  rejectedSave([]);
+  renderRejected();
 }
 
 let flushingOutbox = false;
@@ -120,10 +182,20 @@ async function flushOutbox() {
     const remaining = [];
     for (const item of queue) {
       try {
-        await api(item.method, item.path, item.body);
+        const result = await api(item.method, item.path, item.body);
+        outboxRemove(item.op_id);
+        const entry = item.op_id ? pendingOps.get(item.op_id) : null;
+        if (entry) entry.finish(null, result);
       } catch (error) {
-        // Descarta erros definitivos (4xx); mantém apenas falhas de rede/5xx.
-        if (isTerminalError(error)) continue;
+        if (isTerminalError(error)) {
+          // 4xx definitivo: sai da fila, mas fica visível como rejeitado.
+          outboxRemove(item.op_id);
+          recordRejected(item, error.message);
+          showToast(`Registro rejeitado: ${error.message}`, true);
+          const entry = item.op_id ? pendingOps.get(item.op_id) : null;
+          if (entry) entry.finish(error);
+          continue;
+        }
         remaining.push(item);
       }
     }
@@ -500,7 +572,7 @@ function renderRacing() {
 function canUndoLap(lane) {
   return (
     lane.last_lap_at != null &&
-    Date.now() - lane.last_lap_at * 1000 < UNDO_WINDOW_MS &&
+    serverNow() - lane.last_lap_at < UNDO_WINDOW_MS / 1000 &&
     lane.laps > 0
   );
 }
@@ -522,7 +594,7 @@ function tick() {
   const lane = currentLane();
   if (!lane || !currentHeat || currentScreen !== "racing") return;
   const elapsed = currentHeat.started_at
-    ? Math.max(0, Date.now() / 1000 - currentHeat.started_at)
+    ? Math.max(0, serverNow() - currentHeat.started_at)
     : 0;
   els.fcClock.textContent = formatTenths(elapsed);
   if (currentHeat.heat_type === "maratona") {
@@ -551,8 +623,93 @@ function setRegisterPending(value) {
     registerTimeout = setTimeout(() => {
       registerPending = false;
       if (currentScreen === "racing") renderRacing();
-    }, 6000);
+    }, REGISTER_GUARD_MS);
   }
+}
+
+// op_id em voo -> { item, finish } (resolve/reject uma única vez).
+const pendingOps = new Map();
+
+function buildRegisterItem(type, lane) {
+  const opId = newOpId();
+  const clientTs = serverNow();
+  const verb = type === "finish" ? "finish" : "lap";
+  return {
+    op_id: opId,
+    action: type,
+    lane_id: lane.id,
+    method: "POST",
+    path: `/api/lanes/${lane.id}/${verb}`,
+    body: { op_id: opId, client_ts: clientTs },
+    client_ts: clientTs,
+    ts: Date.now(),
+  };
+}
+
+function sendRegister(item) {
+  // Grava na outbox ANTES de enviar; só sai com ack ou resposta 2xx.
+  outboxAdd(item);
+  return new Promise((resolve, reject) => {
+    const entry = { item, settled: false, timer: null };
+    entry.finish = (error, result) => {
+      if (entry.settled) return;
+      entry.settled = true;
+      if (entry.timer) clearTimeout(entry.timer);
+      pendingOps.delete(item.op_id);
+      if (error) reject(error);
+      else resolve(result);
+    };
+    pendingOps.set(item.op_id, entry);
+
+    const restFallback = () => {
+      if (entry.settled) return;
+      api(item.method, item.path, item.body)
+        .then((result) => {
+          outboxRemove(item.op_id);
+          entry.finish(null, result);
+        })
+        .catch((error) => {
+          if (isTerminalError(error)) {
+            outboxRemove(item.op_id);
+            recordRejected(item, error.message);
+          }
+          entry.finish(error);
+        });
+    };
+
+    // Sem ack em 3 s: reenvia via REST com o MESMO op_id.
+    entry.timer = setTimeout(restFallback, ACK_TIMEOUT_MS);
+    const sent = wsSend({
+      type: item.action,
+      lane_id: item.lane_id,
+      op_id: item.op_id,
+      client_ts: item.client_ts,
+    });
+    if (!sent) {
+      clearTimeout(entry.timer);
+      restFallback();
+    }
+  });
+}
+
+function onWsAck(message) {
+  const entry = pendingOps.get(message.op_id);
+  if (!entry) return;
+  outboxRemove(message.op_id);
+  entry.finish(null, message.result);
+}
+
+function onWsError(message) {
+  const entry = message.op_id ? pendingOps.get(message.op_id) : null;
+  if (!entry) {
+    onActionError(message.message);
+    return;
+  }
+  if (isTerminalError({ message: message.message })) {
+    outboxRemove(message.op_id);
+    recordRejected(entry.item, message.message);
+  }
+  entry.finish(new Error(message.message));
 }
 
 async function registerFinish() {
@@ -560,12 +717,11 @@ async function registerFinish() {
   if (!lane || registerPending) return;
   setRegisterPending(true);
   els.fcRegister.textContent = "REGISTRANDO...";
-  if (wsSend({ type: "finish", lane_id: lane.id })) return;
   try {
-    const result = await api("POST", `/api/lanes/${lane.id}/finish`);
+    const result = await sendRegister(buildRegisterItem("finish", lane));
     applyLaneUpdate(lane, {
       status: "finished",
-      finish_at: Date.now() / 1000,
+      finish_at: result.received_at || serverNow(),
       race_time_ms: result.race_time_ms,
       race_time_display: result.race_time_display,
       speed_ms: result.speed_ms,
@@ -579,11 +735,8 @@ async function registerFinish() {
       reconcile().catch(() => {});
       return;
     }
-    if (isTerminalError(error)) {
-      onActionError(error.message);
-      return;
-    }
-    enqueue({ method: "POST", path: `/api/lanes/${lane.id}/finish` });
+    if (isNetworkError(error)) setOffline(true);
+    onActionError(error.message);
   }
 }
 
@@ -592,9 +745,8 @@ async function registerLap() {
   if (!lane || registerPending) return;
   setRegisterPending(true);
   els.fcRegister.textContent = "REGISTRANDO...";
-  if (wsSend({ type: "lap", lane_id: lane.id })) return;
   try {
-    const result = await api("POST", `/api/lanes/${lane.id}/lap`);
+    const result = await sendRegister(buildRegisterItem("lap", lane));
     const poolLength = eventDetail ? eventDetail.pool_length_m : 0;
     const laps = (lane.laps || 0) + 1;
     applyLaneUpdate(lane, {
@@ -606,11 +758,8 @@ async function registerLap() {
     setRegisterPending(false);
     if (currentScreen === "racing") renderRacing();
   } catch (error) {
-    if (isTerminalError(error)) {
-      onActionError(error.message);
-      return;
-    }
-    enqueue({ method: "POST", path: `/api/lanes/${lane.id}/lap` });
+    if (isNetworkError(error)) setOffline(true);
+    onActionError(error.message);
   }
 }
 
@@ -765,7 +914,8 @@ function onHeatState(heat) {
   currentHeat = heat;
   selection.participant_name = lane.participant_name;
   saveSelection();
-  setRegisterPending(false);
+  // Não libera o botão antes do ack: há um registro em voo.
+  if (pendingOps.size === 0) setRegisterPending(false);
   const target = resolveScreen(heat, lane);
   show(target, { buzzer: target === "racing" && previous !== "racing" });
 }
@@ -826,8 +976,10 @@ const ws = new WSClient(wsUrl(), (message) => {
     }
   } else if (message.type === "heat_state") {
     onHeatState(message.payload);
+  } else if (message.type === "ack") {
+    onWsAck(message);
   } else if (message.type === "error") {
-    onActionError(message.message);
+    onWsError(message);
   }
 });
 
@@ -862,6 +1014,10 @@ els.dqCancel.addEventListener("click", () =>
 );
 els.dqConfirm.addEventListener("click", confirmDq);
 els.ffNext.addEventListener("click", nextBattery);
+if (els.rejectedClear) {
+  els.rejectedClear.addEventListener("click", clearRejected);
+}
 
+renderRejected();
 reconcile().catch(() => {});
 ws.connect();

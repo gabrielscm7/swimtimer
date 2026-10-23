@@ -135,7 +135,12 @@ async def test_concurrent_finish_only_one_accepted(client):
 
 
 @pytest.mark.asyncio
-async def test_concurrent_laps_unique_numbers(client):
+async def test_concurrent_laps_unique_numbers(client, monkeypatch):
+    from app.config import settings
+
+    # Desativa o debounce para validar apenas a numeração única sob concorrência.
+    monkeypatch.setattr(settings, "MIN_LAP_INTERVAL_S", 0.0)
+
     http, factory = client
     _event_data, heat = await _active_maratona(http, [(1, "Ana")])
     lane_id = heat["heat_lanes"][0]["id"]

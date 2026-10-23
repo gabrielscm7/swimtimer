@@ -7,6 +7,7 @@ from sqlalchemy import (
     Index,
     Integer,
     String,
+    Text,
     UniqueConstraint,
     text,
 )
@@ -205,6 +206,10 @@ class HeatLane(Base):
     )
     finish_at: Mapped[float | None] = mapped_column(Float, nullable=True)
     race_time_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    received_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+    late: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False, server_default=text("0")
+    )
 
     heat: Mapped["Heat"] = relationship(back_populates="lanes")
     athlete: Mapped["Athlete | None"] = relationship(back_populates="lanes")
@@ -229,6 +234,10 @@ class LapEvent(Base):
     lap_number: Mapped[int] = mapped_column(Integer, nullable=False)
     recorded_at: Mapped[float] = mapped_column(Float, nullable=False)
     is_undo: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    received_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+    late: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False, server_default=text("0")
+    )
 
     lane: Mapped["HeatLane"] = relationship(back_populates="lap_events")
 
@@ -236,3 +245,36 @@ class LapEvent(Base):
         Index("ix_lap_event_lane_recorded", "lane_id", "recorded_at"),
         UniqueConstraint("lane_id", "lap_number", name="uq_lap_event_lane_number"),
     )
+
+
+class ActionLog(Base):
+    """Auditoria de toda acao que muda estado do sistema."""
+
+    __tablename__ = "action_log"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    received_at: Mapped[float] = mapped_column(Float, nullable=False)
+    effective_ts: Mapped[float] = mapped_column(Float, nullable=False)
+    event_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    heat_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    lane_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    action: Mapped[str] = mapped_column(String, nullable=False)
+    op_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    source_ip: Mapped[str | None] = mapped_column(String, nullable=True)
+    payload_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    __table_args__ = (
+        Index("ix_action_log_heat_received", "heat_id", "received_at"),
+    )
+
+
+class ProcessedOp(Base):
+    """Resultado original de um op_id, para reenvios idempotentes."""
+
+    __tablename__ = "processed_op"
+
+    op_id: Mapped[str] = mapped_column(String, primary_key=True)
+    lane_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    action: Mapped[str] = mapped_column(String, nullable=False)
+    result_json: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[float] = mapped_column(Float, nullable=False)

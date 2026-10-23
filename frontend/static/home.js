@@ -38,7 +38,7 @@ function allHeats() {
 
 function elapsedSeconds(heat) {
   if (!heat || !heat.started_at) return 0;
-  const end = heat.finished_at || Date.now() / 1000;
+  const end = heat.finished_at || serverNow();
   return Math.max(0, end - heat.started_at);
 }
 

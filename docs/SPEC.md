@@ -1,6 +1,6 @@
-# SPEC — SwimTimer v2.1
-**Versão:** 2.1  
-**Data:** 2026-10-21  
+# SPEC — SwimTimer v2.4
+**Versão:** 2.4  
+**Data:** 2026-10-22  
 **Status:** Implementado
 
 ---
@@ -82,10 +82,18 @@ Heat (bateria)
 HeatLane
   id, heat_id, lane_number (1–8), participant_name, athlete_id, team_id
   status (assigned|ready|active|finished|dq)
-  finish_at, race_time_ms
+  finish_at (tempo do toque), race_time_ms, received_at, late
 
 LapEvent
-  id, lane_id, lap_number, recorded_at (servidor), is_undo
+  id, lane_id, lap_number, recorded_at (tempo efetivo do toque),
+  received_at, late, is_undo
+
+ActionLog
+  id, received_at, effective_ts, event_id, heat_id, lane_id, action,
+  op_id, source_ip, payload_json
+
+ProcessedOp
+  op_id (PK), lane_id, action, result_json, created_at
 ```
 
 > Hierarquia: **Evento → Prova → Bateria → Raia/Atleta → Resultado**.
@@ -181,8 +189,10 @@ CREATE TABLE heat_lane (
     athlete_id       TEXT REFERENCES athlete(id),
     team_id          TEXT REFERENCES team(id),
     status           TEXT DEFAULT 'assigned',
-    finish_at        REAL,
-    race_time_ms     INTEGER,
+    finish_at        REAL,             -- tempo efetivo do toque
+    race_time_ms     INTEGER,          -- quantizado em 10 ms
+    received_at      REAL,             -- instante de recebimento no servidor
+    late             BOOLEAN NOT NULL DEFAULT 0,  -- now - effective_ts > 2 s
     UNIQUE (heat_id, lane_number)
 );
 
@@ -190,12 +200,38 @@ CREATE TABLE lap_event (
     id          TEXT PRIMARY KEY,
     lane_id     TEXT NOT NULL REFERENCES heat_lane(id),
     lap_number  INTEGER NOT NULL,
-    recorded_at REAL NOT NULL,  -- unix timestamp do SERVIDOR
-    is_undo     BOOLEAN DEFAULT FALSE
+    recorded_at REAL NOT NULL,  -- tempo efetivo do toque (clamped)
+    is_undo     BOOLEAN DEFAULT FALSE,
+    received_at REAL,           -- instante de recebimento no servidor
+    late        BOOLEAN NOT NULL DEFAULT 0
+);
+
+-- Toda ação que muda estado grava uma linha.
+CREATE TABLE action_log (
+    id           TEXT PRIMARY KEY,
+    received_at  REAL NOT NULL,
+    effective_ts REAL NOT NULL,
+    event_id     TEXT,
+    heat_id      TEXT,
+    lane_id      TEXT,
+    action       TEXT NOT NULL,  -- start|abort|finish_heat|finish|lap|dq|undo_lap
+    op_id        TEXT,
+    source_ip    TEXT,
+    payload_json TEXT
+);
+
+-- Resultado original de um op_id (reenvios idempotentes).
+CREATE TABLE processed_op (
+    op_id       TEXT PRIMARY KEY,
+    lane_id     TEXT,
+    action      TEXT NOT NULL,
+    result_json TEXT NOT NULL,
+    created_at  REAL NOT NULL
 );
 
 CREATE INDEX ix_heat_event_order ON heat(event_id, order_num);
 CREATE INDEX ix_lap_event_lane_recorded ON lap_event(lane_id, recorded_at);
+CREATE INDEX ix_action_log_heat_received ON action_log(heat_id, received_at);
 ```
 
 ---
@@ -284,8 +320,19 @@ POST   /api/lanes/{lane_id}/dq        → desclassificar
 DELETE /api/lanes/{lane_id}/lap/last  → desfazer última volta (maratona, < 30s)
 ```
 
+`finish` e `lap` aceitam corpo **opcional** `{"op_id", "client_ts"}`:
+- `op_id`: idempotência. Um `op_id` já processado devolve o resultado original
+  com 200, sem efeito colateral.
+- `client_ts`: instante do toque em base de tempo do servidor. O servidor usa
+  `effective_ts = clamp(client_ts, heat.started_at, now)`; sem `client_ts` usa
+  o recebimento (ou a âncora monotônica da bateria). `late=true` quando
+  `now - effective_ts > 2 s`.
+- Volta repetida na mesma raia a menos de `MIN_LAP_INTERVAL_S` (padrão 5 s)
+  retorna `409 volta_duplicada`.
+
 ### Admin
 ```
+GET    /api/time                      → {now: <epoch do servidor>}
 GET    /api/status                    → {uptime, connected_clients, active_heats}
 GET    /api/health                    → healthcheck
 ```
@@ -300,8 +347,9 @@ ws://10.42.0.1:8080/ws
 ```
 
 Conexão única para todos os clientes. O servidor faz broadcast global. Toda
-mensagem carrega um campo `scope` para o cliente filtrar. As ações de escrita
-são feitas via REST; o WebSocket é usado somente para receber atualizações.
+mensagem de estado carrega um campo `scope` para o cliente filtrar. Registro de
+chegadas/voltas pode ser feito pelo WebSocket (com ack explícito) ou por REST;
+prontidão e controle da prova usam REST.
 
 ### Mensagens Servidor → Cliente
 
@@ -349,6 +397,24 @@ são feitas via REST; o WebSocket é usado somente para receber atualizações.
     "all_ready": false
   }
 }
+
+// Confirmação de finish/lap (resposta direta a quem enviou a ação)
+{
+  "type": "ack",
+  "op_id": "uuid-op",
+  "ok": true,
+  "result": { /* mesmo resultado do endpoint REST */ }
+}
+
+// Erro de ação; conexão permanece aberta
+{
+  "type": "error",
+  "op_id": "uuid-op",
+  "message": "volta_duplicada"
+}
+
+// Heartbeat
+{ "type": "pong" }
 ```
 
 Ao conectar, o servidor envia `server_status`, um `heat_state` para cada
@@ -370,8 +436,20 @@ bateria ativa. Clientes também reconciliam via REST após reconexão.
   bateria e `standings` vazio.
 
 ### Mensagens Cliente → Servidor
-Nenhuma. Registro de voltas/chegadas, prontidão e controle da prova são feitos
-pelos endpoints REST (`/api/lanes/...`, `/api/heats/...`).
+
+```jsonc
+// Registro de chegada/volta com op_id e tempo do toque
+{ "type": "finish", "lane_id": "uuid", "op_id": "uuid-op", "client_ts": 1790000000.0 }
+{ "type": "lap",    "lane_id": "uuid", "op_id": "uuid-op", "client_ts": 1790000000.0 }
+
+// Heartbeat (a cada 5 s no cliente; sem pong em 3 s reconecta)
+{ "type": "ping" }
+```
+
+`op_id` e `client_ts` são opcionais (compatibilidade), mas o cliente atual
+sempre os envia. Toda ação de registro é gravada na outbox local antes do
+envio e só é removida com `ack`/2xx; sem ack em 3 s o cliente reenvia por REST
+com o mesmo `op_id`.
 
 ---
 
@@ -388,7 +466,7 @@ swimtimer/
 │   │   ├── classification.py ← classificação consolidada
 │   │   ├── ws_manager.py     ← WebSocket connection manager
 │   │   └── config.py         ← Settings (porta, banco, limites de upload)
-│   ├── migrations/           ← ambiente Alembic + versões (0001–0005)
+│   ├── migrations/           ← ambiente Alembic + versões (0001–0007)
 │   │   ├── env.py
 │   │   └── versions/
 │   ├── alembic.ini
@@ -437,16 +515,27 @@ swimtimer/
 - Implantação suportada: **um worker uvicorn** com SQLite WAL. Para múltiplos
   workers seria necessário banco com escrita concorrente (PostgreSQL) ou
   outro particionamento — ver `docs/ADR/005-concorrencia.md`.
-- `race_time_ms` é medido no servidor (instante de recebimento). Não é
-  cronometragem oficial de precisão; o sistema não faz essa alegação.
+- `op_id` é checado e gravado em `processed_op` dentro do lock da bateria:
+  reenvios concorrentes devolvem o resultado original sem duplicar.
+- `action_log` registra toda ação que muda estado (start, abort, finish de
+  bateria, finish/lap/dq/undo de raia) para auditoria.
+- Debounce de volta: `MIN_LAP_INTERVAL_S` (padrão 5 s) na mesma raia retorna
+  `409 volta_duplicada`.
+- Tempo do toque: `client_ts` (base do servidor) é clampado a
+  `[started_at, now]`; sem `client_ts` a duração usa âncora `time.monotonic()`
+  por bateria, com fallback wall-clock após restart. `race_time_ms` é
+  quantizado em múltiplos de 10 ms (piso), coerente com o display `MM:SS.cc` —
+  tempos exibidos iguais empatam no ranking. Não é cronometragem oficial de
+  precisão.
 
 ## 7. Segurança e Confiabilidade
 
-- **Timestamp no servidor:** `recorded_at` sempre vem do servidor, nunca do cliente. Elimina drift de relógio de celular.
-- **Undo com janela:** desfazer permitido apenas nos 30 segundos após o registro.
+- **Tempo do toque em base do servidor:** o cliente sincroniza `client_ts` via `GET /api/time`; o servidor clampa a `[started_at, now]`, registra `received_at` e marca `late`. O relógio cru do celular nunca é usado.
+- **Idempotência e auditoria:** `op_id` repetido devolve o resultado original (`processed_op`); toda ação de estado fica em `action_log`. A outbox do fiscal só é limpa com ack/2xx; 4xx ficam visíveis como rejeitados.
+- **Undo com janela:** desfazer permitido apenas nos 30 segundos após o registro (relógio do servidor via `serverNow()` no cliente).
 - **Isolamento por evento:** equipes e atletas são validados contra o `event_id` da raia/importação; um atleta do evento A nunca é aceito no evento B.
 - **Upload de planilha:** extensão + magic bytes (XLSX), limite de 2 MB/1000 linhas e parsing sem execução; conteúdo é escapado na renderização.
 - **Índices únicos:** nomes de atletas são únicos por evento+equipe (case-insensitive), evitando duplicatas por importações repetidas.
-- **Reconexão automática:** cliente WebSocket reconecta com exponential backoff (1s, 2s, 4s, 8s, máx 30s).
+- **Reconexão automática:** cliente WebSocket reconecta com backoff `[500, 1000, 2000, 3000, 5000]` ms; heartbeat `ping` a cada 5 s e reconexão se não houver `pong` em 3 s.
 - **Persistência imediata:** cada lap_event é escrito no SQLite antes de fazer broadcast.
 - **Backup automático:** `start.sh` faz cópia do banco antes de subir o servidor.

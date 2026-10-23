@@ -33,6 +33,8 @@ class Settings(BaseSettings):
     MAX_LOGO_BYTES: int = 1_048_576
     MAX_IMPORT_BYTES: int = 2_097_152
     MAX_IMPORT_ROWS: int = 1000
+    MIN_LAP_INTERVAL_S: float = 5.0
+    LATE_AFTER_S: float = 2.0
 
     @property
     def frontend_dir(self) -> Path:

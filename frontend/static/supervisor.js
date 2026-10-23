@@ -488,7 +488,7 @@ function updateClock() {
     clock.textContent = "00:00.0";
     return;
   }
-  const elapsed = Math.max(0, Date.now() / 1000 - heat.started_at);
+  const elapsed = Math.max(0, serverNow() - heat.started_at);
   if (heat.heat_type === "maratona") {
     const remaining = Math.max(0, (heat.duration_s || 0) - elapsed);
     clock.textContent = formatClock(remaining);

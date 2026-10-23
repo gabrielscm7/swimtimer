@@ -4,6 +4,47 @@ Formato: [Semantic Versioning](https://semver.org/lang/pt-BR/)
 
 ---
 
+## [2.4.0] — 2026-10-22
+
+### Added
+- Tempo do toque: `finish`/`lap` (REST e WS) aceitam `client_ts` opcional;
+  `effective_ts = clamp(client_ts, started_at, now)`, com `received_at` e
+  `late` persistidos em `heat_lane`/`lap_event`
+- Idempotência: `finish`/`lap` aceitam `op_id` opcional; resultado original é
+  cacheado em `processed_op` e um `op_id` repetido retorna 200/ack sem efeito
+  colateral
+- Tabela `action_log` para toda ação que muda estado (`start`, `abort`,
+  `finish_heat`, `finish`, `lap`, `dq`, `undo_lap`) com recebimento, tempo
+  efetivo, evento/bateria/raia, `op_id`, IP e payload
+- `GET /api/time` para sincronização de relógio do cliente
+- WebSocket: ack explícito para `finish`/`lap` (`ack`/`error` com `op_id`) e
+  heartbeat `ping`/`pong`
+- Debounce de volta: `MIN_LAP_INTERVAL_S` (padrão 5 s) retorna
+  `409 volta_duplicada` para toques repetidos na mesma raia
+- Duração sem `client_ts` usa âncora `time.monotonic()` por bateria (fallback
+  wall-clock após restart); `race_time_ms` quantizado para múltiplos de 10 ms
+- Frontend: sincronização de relógio (3 amostras, menor RTT, a cada 30 s e na
+  reconexão) com `serverNow()`; outbox gravada antes do envio, reenvio REST com
+  o mesmo `op_id` após 3 s sem ack; lista visível de "registros rejeitados";
+  heartbeat 5 s com reconexão em backoff `[500,1000,2000,3000,5000]`
+- Migração `0007_time_ack_idempotencia`
+
+### Changed
+- `lap_event.recorded_at` passa a representar o tempo efetivo do toque; o
+  instante de recebimento fica em `received_at`
+- Cronômetros, janela de undo e countdowns usam `serverNow()` (fiscal,
+  supervisor, público e home)
+- `volta_duplicada` tratado como erro terminal no fiscal
+- Versão da API em `2.4.0`
+
+### Fixed
+- Toques perdidos em silêncio: toda ação WebSocket de registro tem ack e a
+  outbox só é limpa com ack/2xx; 4xx ficam visíveis como rejeitados
+- Reenvios não duplicam mais voltas/chegadas (`op_id` + `processed_op`)
+- Ranking coerente com o display `MM:SS.cc` (tempos exibidos iguais empatam)
+
+---
+
 ## [2.3.0] — 2026-10-21
 
 ### Added

@@ -37,6 +37,13 @@ test("erros definitivos por mensagem quando não há status", () => {
   );
 });
 
+test("volta_duplicada é erro terminal (debounce do servidor)", () => {
+  assert.equal(isTerminalError({ message: "volta_duplicada" }), true);
+  const error = new Error("volta_duplicada");
+  error.status = 409;
+  assert.equal(isTerminalError(error), true);
+});
+
 test("applyLaneUpdate mescla campos no objeto da raia", () => {
   const lane = { id: "1", status: "active", laps: 0 };
   const result = applyLaneUpdate(lane, { status: "finished", laps: 3 });

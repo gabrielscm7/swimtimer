@@ -13,6 +13,7 @@
     "nenhum_lap",
     "sem_participantes",
     "raias_duplicadas",
+    "volta_duplicada",
   ];
 
   // Erros definitivos (4xx) não devem permanecer na fila offline; erros de

@@ -45,26 +45,31 @@ def test_ws_broadcasts_scoped_messages(ws_client):
         ws_client.post(f"/api/heats/{heat['id']}/open-ready-check")
 
         received = []
-        for _ in range(10):
+        for _ in range(50):
             message = websocket.receive_json()
             received.append(message)
-            types = {item["type"] for item in received}
-            if {"heat_state", "ready_update"} <= types:
+            relevant = {
+                item["type"]
+                for item in received
+                if item.get("heat_id") == heat["id"]
+            }
+            if {"heat_state", "ready_update"} <= relevant:
                 break
 
-    types = {message["type"] for message in received}
-    assert "heat_state" in types
-    assert "ready_update" in types
-
     heat_state = next(
-        message for message in received if message["type"] == "heat_state"
+        message
+        for message in received
+        if message["type"] == "heat_state"
+        and message.get("heat_id") == heat["id"]
     )
     assert heat_state["scope"] == "heat"
-    assert heat_state["heat_id"] == heat["id"]
     assert heat_state["payload"]["status"] == "ready_check"
 
     ready_update = next(
-        message for message in received if message["type"] == "ready_update"
+        message
+        for message in received
+        if message["type"] == "ready_update"
+        and message.get("heat_id") == heat["id"]
     )
     assert ready_update["scope"] == "heat"
     assert ready_update["payload"]["lanes_pending"] == [1]
@@ -114,7 +119,7 @@ def test_ws_action_error_keeps_connection(ws_client):
 def test_ws_internal_error_keeps_connection(ws_client, monkeypatch):
     import app.main as main_module
 
-    async def _boom(session, lane_id):
+    async def _boom(session, lane_id, **kwargs):
         raise RuntimeError("falha simulada")
 
     monkeypatch.setattr(main_module, "_do_finish", _boom)

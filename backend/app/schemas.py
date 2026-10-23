@@ -366,6 +366,13 @@ class LaneUpdate(BaseModel):
     team_id: Optional[str] = None
 
 
+class LaneActionRequest(BaseModel):
+    """Corpo opcional de finish/lap: idempotencia e tempo do toque."""
+
+    op_id: Optional[str] = Field(default=None, max_length=120)
+    client_ts: Optional[float] = Field(default=None, ge=0)
+
+
 class HeatLaneResponse(BaseModel):
     id: str
     heat_id: str

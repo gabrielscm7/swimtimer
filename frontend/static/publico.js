@@ -122,7 +122,7 @@ function subtitle() {
 
 function marathonRemaining(heat) {
   if (!heat.started_at) return heat.duration_s || 0;
-  return Math.max(0, (heat.duration_s || 0) - (Date.now() / 1000 - heat.started_at));
+  return Math.max(0, (heat.duration_s || 0) - (serverNow() - heat.started_at));
 }
 
 function posClass(index) {
@@ -209,13 +209,13 @@ function updateTick() {
       clock.textContent = formatClock(marathonRemaining(heat));
     } else {
       const elapsed = heat.started_at
-        ? Math.max(0, Date.now() / 1000 - heat.started_at)
+        ? Math.max(0, serverNow() - heat.started_at)
         : 0;
       clock.textContent = formatTenths(elapsed);
     }
   }
   if (heat.heat_type === "bateria" && heat.started_at) {
-    const text = formatTime((Date.now() / 1000 - heat.started_at) * 1000);
+    const text = formatTime((serverNow() - heat.started_at) * 1000);
     document.querySelectorAll("[data-lane-time]").forEach((el) => {
       el.textContent = text;
     });
