@@ -28,6 +28,29 @@
     return (heats || []).find((heat) => heat.id === heatId) || null;
   }
 
+  function labels() {
+    return typeof globalThis !== "undefined" ? globalThis.Labels : null;
+  }
+
+  function provaLabel(prova) {
+    const api = labels();
+    return api ? api.provaLabel(prova) : `${prova.order_num}. ${prova.name}`;
+  }
+
+  function bateriaLabel(heat, prova) {
+    const api = labels();
+    if (!api) {
+      const prefix = prova ? `${prova.order_num}. ${prova.name} · ` : "";
+      return `${prefix}Bateria ${heat.heat_index_in_prova || heat.order_num} · ${heat.name}`;
+    }
+    return api.bateriaLabel(heat, {
+      index: heat.heat_index_in_prova,
+      total: heat.heats_in_prova,
+      provaOrder: prova ? prova.order_num : heat.prova_order_num,
+      includeProva: true,
+    });
+  }
+
   function resolveRef(ref, eventData) {
     const parsed = parseRef(ref);
     if (!parsed || !eventData) return null;
@@ -40,7 +63,7 @@
         ref,
         prova,
         heat: null,
-        label: `${prova.order_num}. ${prova.name}`,
+        label: provaLabel(prova),
         eligible: prova.status === "finished",
       };
     }
@@ -53,7 +76,7 @@
       ref,
       prova,
       heat,
-      label: `${prova ? `${prova.order_num}. ${prova.name} · ` : ""}Bateria ${heat.order_num} · ${heat.name}`,
+      label: bateriaLabel(heat, prova),
       eligible: heat.status === "finished",
     };
   }
@@ -120,10 +143,20 @@
 
   function nextProvaLabel(next) {
     if (!next) return "";
+    const api = labels();
+    const provaText = api
+      ? api.provaLabel(next.prova)
+      : `${next.prova.order_num}. ${next.prova.name}`;
     const battery = next.heat
-      ? ` · Bateria ${next.heat.heat_index_in_prova ?? next.heat.order_num}`
+      ? api
+        ? ` · ${api.bateriaLabel(next.heat, {
+            index: next.heat.heat_index_in_prova,
+            total: next.heat.heats_in_prova,
+            provaOrder: next.prova.order_num,
+          })}`
+        : ` · Bateria ${next.heat.heat_index_in_prova ?? next.heat.order_num}`
       : "";
-    return `Próxima prova: ${next.prova.order_num}. ${next.prova.name}${battery}`;
+    return `Próxima prova: ${provaText}${battery}`;
   }
 
   const api = {

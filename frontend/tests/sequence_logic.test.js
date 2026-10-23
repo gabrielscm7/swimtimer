@@ -1,6 +1,8 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
+globalThis.Labels = require("../static/common/labels.js");
+
 const {
   heatsSorted,
   nextScheduledAfter,
@@ -113,12 +115,31 @@ test("nextProvaAfter aponta a proxima prova com bateria agendada", () => {
   assert.equal(nextProvaAfter(heats, provas, b2), null);
 });
 
-test("provaHeaderLabel monta 'Prova X · Bateria i de N'", () => {
+test("provaHeaderLabel usa o padrao compartilhado de bateria", () => {
   const heats = scenario();
   const a2 = heats.find((heat) => heat.id === "a2");
-  assert.equal(
-    provaHeaderLabel(a2),
-    "Prova 1 · Prova A · Bateria 2 de 2"
-  );
+  assert.equal(provaHeaderLabel(a2), "BATERIA 2 de 2 · Prova 1");
   assert.equal(provaHeaderLabel(null), "");
+});
+
+test("ordem intercalada A1,B1,A2,B2 mantem a sequencia global", () => {
+  const provasIntercaladas = [
+    { id: "A", order_num: 1, name: "Prova A" },
+    { id: "B", order_num: 2, name: "Prova B" },
+  ];
+  const heats = [
+    { id: "a1", prova_id: "A", event_seq: 1, order_num: 1, status: "scheduled" },
+    { id: "b1", prova_id: "B", event_seq: 2, order_num: 2, status: "scheduled" },
+    { id: "a2", prova_id: "A", event_seq: 3, order_num: 3, status: "scheduled" },
+    { id: "b2", prova_id: "B", event_seq: 4, order_num: 4, status: "scheduled" },
+  ];
+  assert.deepEqual(
+    heatsSorted(heats).map((heat) => heat.id),
+    ["a1", "b1", "a2", "b2"]
+  );
+  assert.equal(nextScheduledAfter(heats, 1).id, "b1");
+  assert.equal(nextScheduledAfter(heats, 2).id, "a2");
+  const next = nextProvaAfter(heats, provasIntercaladas, heats[1]);
+  assert.equal(next.heat.id, "a2");
+  assert.equal(next.prova.id, "A");
 });

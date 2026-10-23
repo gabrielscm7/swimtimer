@@ -58,7 +58,7 @@ function slideInfo(kind, targetId) {
     const prova = findProva(targetId);
     if (!prova) return null;
     return {
-      label: `${prova.order_num}. ${prova.name}`,
+      label: Labels.provaLabel(prova),
       status: prova.status,
       eligible: prova.status === "finished",
     };
@@ -67,7 +67,12 @@ function slideInfo(kind, targetId) {
   if (!found) return null;
   const { prova, heat } = found;
   return {
-    label: `${prova.order_num}. ${prova.name} · Bateria ${heat.order_num} · ${heat.name}`,
+    label: `${Labels.bateriaLabel(heat, {
+      index: heat.heat_index_in_prova,
+      total: heat.heats_in_prova,
+      provaOrder: prova.order_num,
+      includeProva: true,
+    })}`,
     status: heat.status,
     eligible: heat.status === "finished",
   };
@@ -141,11 +146,7 @@ function excludedTable(entries) {
 
 function classificationHTML(summary) {
   const data = summary.classification || {};
-  if (!summary.consolidate_results) {
-    return `
-      <div class="res-section-title">Classificação</div>
-      <p class="res-empty">Esta prova está configurada como “por bateria”; o ranking consolidado não é gerado. Os resultados de cada bateria aparecem abaixo.</p>`;
-  }
+  const help = Labels.classificationHelp(true, summary.heat_count);
   const mode = data.mixed_ranking || summary.mixed_ranking || "both";
   const sections = [];
   if (mode !== "by_naipe") {
@@ -161,7 +162,8 @@ function classificationHTML(summary) {
   }
   sections.push(excludedTable(data.excluded || []));
   return `
-    <div class="res-section-title">Classificação</div>
+    <div class="level-title prova"><span class="level-chip prova"><span class="level-icon">◆</span>PROVA</span> Resultado da PROVA</div>
+    <p class="res-legend">${escapeHtml(help)}</p>
     ${sections.join("") || '<p class="res-empty">Nenhum resultado válido ainda.</p>'}
     <p class="res-legend">${
       data.is_provisional
@@ -221,9 +223,15 @@ function batteryCard(heat, details, forceOpen) {
     (lane) => lane.status === "finished" || lane.status === "dq"
   ).length;
   return `
-    <details class="res-heat" data-heat="${heat.id}" ${open}>
+    <details class="res-heat level-card bateria" data-heat="${heat.id}" ${open}>
       <summary>
-        <span>Bateria ${heat.heat_index_in_prova ?? heat.order_num} · ${escapeHtml(heat.name)}</span>
+        <span class="level-chip bateria"><span class="level-icon">▸</span>BATERIA</span>
+        <span>${escapeHtml(
+          Labels.bateriaLabel(heat, {
+            index: heat.heat_index_in_prova,
+            total: heat.heats_in_prova,
+          })
+        )}</span>
         <span class="res-badge">${escapeHtml(statusLabel(heat.status))}</span>
         ${snapshotBadge(snapshot)}
         <span class="muted">${finished}/${participants.length} finalizadas</span>
@@ -246,14 +254,14 @@ function renderDetail(cache) {
     summary.naipe === "MISTO" ? "Misto" : summary.naipe || "",
     summary.category || "",
     summary.distance_m ? `${summary.distance_m}m` : "",
-    summary.consolidate_results ? "consolidada" : "por bateria",
   ]
     .filter(Boolean)
     .join(" · ");
   els.detail.innerHTML = `
-    <article class="res-card">
+    <article class="res-card level-card prova">
       <div class="res-card-head">
-        <h2>${summary.order_num}. ${escapeHtml(summary.name)}</h2>
+        <span class="level-chip prova"><span class="level-icon">◆</span>PROVA</span>
+        <h2>${escapeHtml(Labels.provaLabel(summary))}</h2>
         <span class="res-badge">${escapeHtml(statusLabel(summary.status))}</span>
         ${provaBadge(heats)}
       </div>
@@ -263,9 +271,12 @@ function renderDetail(cache) {
         <button class="res-btn" data-action="pin-ref" data-kind="prova" data-id="${summary.id}">Fixar prova agora</button>
       </div>
     </article>
-    <article class="res-card">${classificationHTML(summary)}</article>
-    <article class="res-card">
-      <div class="res-card-head"><h2>Baterias</h2></div>
+    <article class="res-card level-card prova">${classificationHTML(summary)}</article>
+    <article class="res-card level-card bateria">
+      <div class="res-card-head">
+        <span class="level-chip bateria"><span class="level-icon">▸</span>BATERIA</span>
+        <h2>Resultados por BATERIA</h2>
+      </div>
       ${
         heats.length
           ? heats
@@ -293,7 +304,7 @@ function renderSidebar() {
       (prova) => `
       <button class="res-prova-btn ${prova.id === selectedProvaId ? "active" : ""}"
         data-prova="${prova.id}">
-        ${prova.order_num}. ${escapeHtml(prova.name)}
+        ${escapeHtml(Labels.provaLabel(prova))}
         <small>${escapeHtml(statusLabel(prova.status))} · ${prova.heats_finished}/${prova.heat_count} baterias</small>
       </button>`
     )

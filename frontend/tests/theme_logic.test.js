@@ -73,6 +73,8 @@ test("contrastReport sinaliza aviso e bloqueio", () => {
     muted: "#e0e0e0",
     accent: "#ffffff",
     accent_strong: "#ffffff",
+    lvl_prova: "#ffffff",
+    lvl_bateria: "#ffffff",
   };
   const warned = contrastReport(medium);
   assert.equal(warned.blocked, false);
@@ -119,4 +121,15 @@ test("presets passam no contraste minimo", () => {
     const report = contrastReport(normalizeTheme(preset));
     assert.equal(report.blocked, false, JSON.stringify(report));
   }
+});
+
+test("tokens de nivel tem contraste >= 4,5:1 no preset claro", () => {
+  const claro = normalizeTheme(PRESETS.claro_alto_contraste);
+  const report = contrastReport(claro);
+  assert.ok(report.levelMin >= 4.5, JSON.stringify(report));
+  assert.equal(claro.lvl_prova, "#6d28d9");
+  assert.equal(claro.lvl_bateria, "#0e7490");
+
+  const defaultReport = contrastReport(DEFAULT_THEME);
+  assert.ok(defaultReport.levelMin >= 4.5, JSON.stringify(defaultReport));
 });

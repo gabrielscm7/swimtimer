@@ -109,6 +109,17 @@ isolamento de dados por evento e operação estável com 200+ atletas.
 - [x] Remoção de `admin.html`, `dashboard.html`, rota legada de bateria e
   `finish-marathon` duplicado
 
+## Versão 2.7 — Bateria como unidade de cadastro (concluída)
+
+- [x] Prova como grupo automático `(heat_type, stroke, distance_m, naipe, category)`
+- [x] Ordem livre por evento (`heat.order_num` único por evento) e intercalação
+  de grupos (A1, B1, A2, B2)
+- [x] Listas fechadas de estilo/categoria compartilhadas backend/frontend
+- [x] Migração `0015` reversível com dados legados
+- [x] Bloqueio pós-resultado com override do supervisor + snapshot `corrected`
+- [x] Elegibilidade derivada da bateria e endpoint `eligible-athletes`
+- [x] Tela única “Baterias” com drag, campo numérico, duplicar e criar N
+
 ## Versão 2.1 — Provas e classificação consolidada (concluída)
 
 - [x] Entidade `Prova` (evento → prova → bateria)

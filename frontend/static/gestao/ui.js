@@ -76,10 +76,10 @@ function participantsOfHeat(heat) {
 
 function provaMeta(prova) {
   const parts = [];
-  if (prova.naipe) parts.push(GestaoLogic.naipeLabel(prova.naipe));
-  if (prova.stroke) parts.push(prova.stroke);
-  if (prova.distance_m) parts.push(`${prova.distance_m}m`);
-  if (prova.category) parts.push(prova.category);
+  if (prova.naipe) parts.push(Labels.naipeLabel(prova.naipe));
+  if (prova.stroke) parts.push(Labels.strokeLabel(prova.stroke));
+  if (prova.distance_m) parts.push(`${prova.distance_m} m`);
+  if (prova.category) parts.push(Labels.categoryLabel(prova.category));
   return parts.join(" · ");
 }
 

@@ -222,44 +222,40 @@ async def test_patch_lane_participant_resets_to_assigned(client):
 
 
 @pytest.mark.asyncio
-async def test_create_heat_duplicate_order_num_rejected(client):
+async def test_create_heat_inserts_at_requested_position(client):
     event = await create_event(client)
-    prova = await create_prova(client, event["id"])
-    await create_heat_in_prova(client, prova["id"], order_num=2)
-    response = await client.post(
-        f"/api/provas/{prova['id']}/heats",
-        json={
-            "name": "Outra",
-            "heat_type": "bateria",
-            "distance_m": 25,
-            "order_num": 2,
-        },
-    )
-    assert response.status_code == 400, response.text
-    assert response.json()["detail"] == "order_num_duplicado"
+    first = await create_heat(client, event["id"], name="B1", order_num=1)
+    second = await create_heat(client, event["id"], name="B2", order_num=2)
+    inserted = await create_heat(client, event["id"], name="B3", order_num=2)
+
+    heats = (await client.get(f"/api/events/{event['id']}/heats")).json()
+    assert [heat["name"] for heat in heats] == ["B1", "B3", "B2"]
+    assert [heat["order_num"] for heat in heats] == [1, 2, 3]
+    assert inserted["order_num"] == 2
 
 
 @pytest.mark.asyncio
-async def test_update_heat_duplicate_order_num_rejected(client):
+async def test_heat_patch_does_not_accept_order_num(client):
     event = await create_event(client)
-    prova = await create_prova(client, event["id"])
-    first = await create_heat_in_prova(client, prova["id"], order_num=1)
-    second = await create_heat_in_prova(client, prova["id"], order_num=2)
+    heat = await create_heat(client, event["id"], order_num=1)
+    await create_heat(client, event["id"], order_num=2)
 
     response = await client.patch(
-        f"/api/heats/{second['id']}", json={"order_num": 1}
+        f"/api/heats/{heat['id']}", json={"order_num": 2}
     )
-    assert response.status_code == 400, response.text
-    assert response.json()["detail"] == "order_num_duplicado"
+    assert response.status_code == 200, response.text
+    assert response.json()["order_num"] == 1
 
 
 @pytest.mark.asyncio
 async def test_update_heat_keeps_order_num(client):
     event = await create_event(client)
-    heat = await create_heat(client, event["id"], order_num=3)
+    await create_heat(client, event["id"], name="B1")
+    await create_heat(client, event["id"], name="B2")
+    heat = await create_heat(client, event["id"], name="B3", order_num=3)
 
     response = await client.patch(
-        f"/api/heats/{heat['id']}", json={"order_num": 3}
+        f"/api/heats/{heat['id']}", json={"name": "Final"}
     )
     assert response.status_code == 200, response.text
     assert response.json()["order_num"] == 3
@@ -414,18 +410,17 @@ async def test_lane_dq_before_start_uses_bateria_code(client):
 
 
 @pytest.mark.asyncio
-async def test_started_prova_keeps_prova_code(client):
+async def test_started_heat_blocks_group_change(client):
     event = await create_event(client)
-    prova = await create_prova(client, event["id"])
-    heat = await create_heat_in_prova(client, prova["id"])
+    heat = await create_heat(client, event["id"])
     await configure_lanes(client, heat["id"], [(1, "Ana")])
     await client.post(f"/api/heats/{heat['id']}/open-ready-check")
-    heat = (await client.get(f"/api/provas/{prova['id']}/heats")).json()[0]
+    heat = (await client.get(f"/api/heats/{heat['id']}")).json()
     await client.post(f"/api/lanes/{heat['heat_lanes'][0]['id']}/ready")
     await client.post(f"/api/heats/{heat['id']}/start")
 
     response = await client.patch(
-        f"/api/provas/{prova['id']}", json={"distance_m": 50}
+        f"/api/heats/{heat['id']}", json={"stroke": "costas"}
     )
     assert response.status_code == 409, response.text
-    assert response.json()["detail"] == "prova_ja_iniciada"
+    assert response.json()["detail"] == "bateria_ja_iniciada"

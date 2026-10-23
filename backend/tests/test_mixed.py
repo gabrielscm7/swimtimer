@@ -1,4 +1,4 @@
-"""Prova mista (naipe MISTO) e modos de ranking (overall/by_naipe/both)."""
+"""Bateria MISTO: sempre classificacao geral + por naipe (ADR-012)."""
 import asyncio
 
 import pytest
@@ -9,8 +9,7 @@ from app.models import HeatLane
 from tests.conftest import (
     create_athlete,
     create_event,
-    create_heat_in_prova,
-    create_prova,
+    create_heat,
     ready_all,
 )
 
@@ -51,7 +50,6 @@ def _classification(mixed_ranking):
         )
     ]
     return build_classification(
-        consolidate_results=True,
         heats=heats,
         team_map={},
         pool_distance_m=25,
@@ -78,26 +76,17 @@ def test_both_returns_overall_and_by_naipe():
     ]
     by_naipe = result["standings_by_naipe"]
     assert set(by_naipe.keys()) == {"M", "F"}
-    # Empates sao tratados separadamente por naipe: ambos 1o do seu naipe.
     assert [entry["lane_id"] for entry in by_naipe["M"]] == ["m1", "m2"]
     assert [entry["position"] for entry in by_naipe["M"]] == [1, 2]
     assert [entry["lane_id"] for entry in by_naipe["F"]] == ["f1", "f2"]
     assert [entry["position"] for entry in by_naipe["F"]] == [1, 2]
-    # Participante sem naipe fica fora do ranking por naipe.
     all_naipe_lanes = {
         entry["lane_id"] for entries in by_naipe.values() for entry in entries
     }
     assert "free" not in all_naipe_lanes
     assert result["standings"][0]["tied"] is True
-    # Overall e by_naipe nao compartilham posicao (copias independentes).
     assert result["standings"][1]["position"] == 1
     assert by_naipe["F"][0]["position"] == 1
-
-
-def test_by_naipe_only_omits_overall_standings():
-    result = _classification("by_naipe")
-    assert result["standings"] == []
-    assert result["standings_by_naipe"] is not None
 
 
 def test_overall_only_omits_by_naipe():
@@ -109,18 +98,13 @@ def test_overall_only_omits_by_naipe():
 @pytest.mark.asyncio
 async def test_prova_misto_accepts_m_and_f_and_reports_rankings(client):
     event = await create_event(client)
-    response = await client.post(
-        f"/api/events/{event['id']}/provas",
-        json={
-            "name": "100 Livres Misto",
-            "distance_m": 100,
-            "naipe": "MISTO",
-            "mixed_ranking": "both",
-        },
+    heat = await create_heat(
+        client, event["id"], stroke="livre", distance_m=100, naipe="MISTO"
     )
-    assert response.status_code == 201, response.text
-    prova = response.json()
+    assert heat["prova_name"] == "100 m Livre · Misto"
+    prova = (await client.get(f"/api/provas/{heat['prova_id']}")).json()
     assert prova["naipe"] == "MISTO"
+    # MISTO sempre exibe geral + por naipe.
     assert prova["mixed_ranking"] == "both"
 
     male = await create_athlete(
@@ -128,9 +112,6 @@ async def test_prova_misto_accepts_m_and_f_and_reports_rankings(client):
     )
     female = await create_athlete(
         client, event["id"], name="Maria", naipe="F"
-    )
-    heat = await create_heat_in_prova(
-        client, prova["id"], distance_m=100
     )
     lanes = await client.post(
         f"/api/heats/{heat['id']}/lanes",
@@ -144,9 +125,7 @@ async def test_prova_misto_accepts_m_and_f_and_reports_rankings(client):
     assert lanes.status_code == 200, lanes.text
 
     await client.post(f"/api/heats/{heat['id']}/open-ready-check")
-    current = (
-        await client.get(f"/api/provas/{prova['id']}/heats")
-    ).json()[0]
+    current = (await client.get(f"/api/heats/{heat['id']}")).json()
     await ready_all(client, current)
     await client.post(f"/api/heats/{heat['id']}/start")
     await asyncio.sleep(0.01)
@@ -162,7 +141,7 @@ async def test_prova_misto_accepts_m_and_f_and_reports_rankings(client):
         await session.commit()
 
     body = (
-        await client.get(f"/api/provas/{prova['id']}/classification")
+        await client.get(f"/api/provas/{heat['prova_id']}/classification")
     ).json()
     assert body["mixed_ranking"] == "both"
     assert body["standings_by_naipe"] is not None
@@ -171,14 +150,13 @@ async def test_prova_misto_accepts_m_and_f_and_reports_rankings(client):
 
 
 @pytest.mark.asyncio
-async def test_mixed_ranking_defaults_to_both(client):
+async def test_prova_nao_misto_usa_apenas_geral(client):
     event = await create_event(client)
-    response = await client.post(
-        f"/api/events/{event['id']}/provas",
-        json={"name": "Sem ranking explicito"},
-    )
-    assert response.status_code == 201, response.text
-    assert response.json()["mixed_ranking"] == "both"
+    heat = await create_heat(client, event["id"], naipe="M", category="mirim")
+    body = (
+        await client.get(f"/api/provas/{heat['prova_id']}/classification")
+    ).json()
+    assert body["mixed_ranking"] == "overall"
 
 
 @pytest.mark.asyncio

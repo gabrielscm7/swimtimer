@@ -9,6 +9,7 @@ from app.models import HeatLane
 from tests.conftest import (
     configure_lanes,
     create_event,
+    create_heat,
     create_heat_in_prova,
     create_prova,
     ready_all,
@@ -57,7 +58,6 @@ def test_rank_lowest_time_independent_of_heat_order():
         ),
     ]
     result = build_classification(
-        consolidate_results=True,
         heats=heats,
         team_map={},
         pool_distance_m=25,
@@ -143,7 +143,6 @@ def test_invalid_results_never_win():
         )
     ]
     result = build_classification(
-        consolidate_results=True,
         heats=heats,
         team_map={},
         pool_distance_m=25,
@@ -160,18 +159,17 @@ def test_invalid_results_never_win():
     }
 
 
-def test_consolidation_disabled_keeps_batteries_separate():
+def test_group_always_consolidates_and_keeps_batteries():
     heats = [
         _heat("h1", 1, [_lap_dict("a", 1, 60000)]),
         _heat("h2", 2, [_lap_dict("b", 1, 59000)]),
     ]
     result = build_classification(
-        consolidate_results=False,
         heats=heats,
         team_map={},
         pool_distance_m=25,
     )
-    assert result["standings"] == []
+    assert [entry["lane_id"] for entry in result["standings"]] == ["b", "a"]
     assert len(result["battery_results"]) == 2
     assert result["battery_results"][0]["entries"][0]["lane_id"] == "a"
     assert result["battery_results"][1]["entries"][0]["lane_id"] == "b"
@@ -183,7 +181,6 @@ def test_provisional_until_all_batteries_finish():
         _heat("h2", 2, [_lap_dict("b", 1, None, status="active")], "active"),
     ]
     result = build_classification(
-        consolidate_results=True,
         heats=heats,
         team_map={},
         pool_distance_m=25,
@@ -224,19 +221,27 @@ async def _set_time(lane_id, time_ms):
 @pytest.mark.asyncio
 async def test_api_consolidates_four_batteries_by_lowest_time(client):
     event = await create_event(client)
-    prova = await create_prova(
-        client, event["id"], name="100 Livres", distance_m=100
+    first = await configure_lanes(
+        client,
+        (
+            await create_heat(
+                client, event["id"], name="Bateria 1", distance_m=100
+            )
+        )["id"],
+        [(1, "A")],
     )
+    prova_id = first["prova_id"]
     times = [62400, 59800, 61100, 60200]
-    lanes = []
-    for index, name in enumerate(["A", "B", "C", "D"], start=1):
-        heat = await _create_battery(client, prova["id"], f"Bateria {index}")
+    lanes = [await _finish_battery(client, first)]
+    for index, name in enumerate(["B", "C", "D"], start=2):
+        heat = await _create_battery(client, prova_id, f"Bateria {index}")
         lane_id = await _finish_battery(client, heat)
-        await _set_time(lane_id, times[index - 1])
         lanes.append(lane_id)
+    for lane_id, time_ms in zip(lanes, times):
+        await _set_time(lane_id, time_ms)
 
     response = await client.get(
-        f"/api/provas/{prova['id']}/classification"
+        f"/api/provas/{prova_id}/classification"
     )
     assert response.status_code == 200, response.text
     body = response.json()
@@ -299,22 +304,22 @@ async def test_api_provisional_while_battery_pending(client):
 
 
 @pytest.mark.asyncio
-async def test_api_consolidation_disabled(client):
+async def test_api_classify_alone_creates_own_group(client):
     event = await create_event(client)
-    prova = await create_prova(
-        client,
-        event["id"],
-        distance_m=100,
-        consolidate_results=False,
+    shared = await create_heat(client, event["id"], distance_m=100)
+    isolated = await create_heat(
+        client, event["id"], distance_m=100, classify_alone=True
     )
-    heat = await _create_battery(client, prova["id"], "Bateria 1")
-    lane_id = await _finish_battery(client, heat)
-    await _set_time(lane_id, 60000)
+    assert isolated["prova_id"] != shared["prova_id"]
+
+    isolated = await configure_lanes(
+        client, isolated["id"], [(1, "Isolada")]
+    )
+    isolated_lane = await _finish_battery(client, isolated)
+    await _set_time(isolated_lane, 60000)
 
     body = (
-        await client.get(f"/api/provas/{prova['id']}/classification")
+        await client.get(f"/api/provas/{isolated['prova_id']}/classification")
     ).json()
-    assert body["consolidate_results"] is False
-    assert body["standings"] == []
+    assert len(body["standings"]) == 1
     assert len(body["battery_results"]) == 1
-    assert body["battery_results"][0]["entries"][0]["lane_id"] == lane_id

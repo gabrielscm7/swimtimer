@@ -49,7 +49,6 @@ async def _start_bateria(client, event_id, heat, participant_count=2):
 async def test_patch_null_em_campos_obrigatorios_retorna_422(client):
     event = await create_event(client)
     team = await create_team(client, event["id"])
-    prova = await create_prova(client, event["id"])
     heat = await create_heat(client, event["id"])
 
     cases = [
@@ -57,12 +56,9 @@ async def test_patch_null_em_campos_obrigatorios_retorna_422(client):
         (f"/api/events/{event['id']}", {"pool_length_m": None}),
         (f"/api/events/{event['id']}", {"status": None}),
         (f"/api/events/{event['id']}", {"public_results_enabled": None}),
-        (f"/api/provas/{prova['id']}", {"name": None}),
-        (f"/api/provas/{prova['id']}", {"order_num": None}),
-        (f"/api/provas/{prova['id']}", {"mixed_ranking": None}),
-        (f"/api/provas/{prova['id']}", {"consolidate_results": None}),
         (f"/api/heats/{heat['id']}", {"name": None}),
-        (f"/api/heats/{heat['id']}", {"order_num": None}),
+        (f"/api/heats/{heat['id']}", {"stroke": None}),
+        (f"/api/heats/{heat['id']}", {"lane_count": None}),
         (f"/api/teams/{team['id']}", {"name": None}),
     ]
     for path, body in cases:
@@ -382,7 +378,7 @@ def test_xlsx_respeita_limite_de_linhas_antes_de_materializar():
 
 def _ws_event(ws_client, name):
     response = ws_client.post(
-        "/api/events", json={"name": name, "pool_length_m": 25}
+        "/api/events", json={"name": name, "date": "2026-10-23", "pool_length_m": 25}
     )
     assert response.status_code == 201, response.text
     return response.json()
@@ -406,13 +402,15 @@ def test_ws_publico_mascara_nomes_por_assinatura(ws_client):
             "team_id": team["id"],
         },
     ).json()
-    prova = ws_client.post(
-        f"/api/events/{event['id']}/provas",
-        json={"name": "100 Livres", "distance_m": 100},
-    ).json()
     heat = ws_client.post(
-        f"/api/provas/{prova['id']}/heats",
-        json={"name": "Bateria 1", "heat_type": "bateria", "distance_m": 100},
+        f"/api/events/{event['id']}/heats",
+        json={
+            "heat_type": "bateria",
+            "stroke": "livre",
+            "distance_m": 100,
+            "naipe": "MISTO",
+            "category": "livre",
+        },
     ).json()
     response = ws_client.post(
         f"/api/heats/{heat['id']}/lanes",
@@ -478,7 +476,7 @@ def test_ws_athletes_changed_respeita_evento_assinado(ws_client):
 @pytest.mark.asyncio
 async def test_cadeia_de_auditoria_sob_concorrencia_entre_baterias(client):
     event = await create_event(client)
-    prova = await create_prova(client, event["id"])
+    prova = await create_prova(client, event["id"], distance_m=50)
     heats = []
     for index in range(3):
         heat = await create_heat_in_prova(
@@ -540,8 +538,7 @@ async def test_nao_altera_naipe_de_atleta_com_resultado_finalizado(client):
 @pytest.mark.asyncio
 async def test_nao_altera_piscina_ou_config_operacional_apos_inicio(client):
     event = await create_event(client)
-    prova = await create_prova(client, event["id"], naipe="M")
-    heat = await create_heat_in_prova(client, prova["id"])
+    heat = await create_heat(client, event["id"], naipe="M")
     await _start_bateria(client, event["id"], heat, participant_count=2)
 
     pool = await client.patch(
@@ -551,7 +548,7 @@ async def test_nao_altera_piscina_ou_config_operacional_apos_inicio(client):
     assert pool.json()["detail"] == "evento_ja_iniciado"
 
     config = await client.patch(
-        f"/api/provas/{prova['id']}", json={"naipe": "MISTO"}
+        f"/api/heats/{heat['id']}", json={"naipe": "MISTO"}
     )
     assert config.status_code == 409
-    assert config.json()["detail"] == "prova_ja_iniciada"
+    assert config.json()["detail"] == "bateria_ja_iniciada"

@@ -24,7 +24,8 @@ TOTAL_HEATS = 50
 LANES = 8
 TEAMS = 8
 ATHLETES = 150
-CATEGORY = "SUB-12"
+CATEGORY = "livre"
+STROKES = ("crawl", "borboleta", "peito", "costas", "livre", "medley")
 
 
 def _heats_for_prova(index: int) -> int:
@@ -85,7 +86,12 @@ async def main() -> None:
             event = (
                 await client.post(
                     "/api/events",
-                    json={"name": "Ensaio Completo", "pool_length_m": 25},
+                    json={
+                        "name": "Ensaio Completo",
+                        "date": "2026-10-23",
+                        "pool_length_m": 25,
+                        "default_lane_count": LANES,
+                    },
                 )
             ).json()
 
@@ -137,37 +143,38 @@ async def main() -> None:
                 f"{len(females)} F), {TEAMS} equipes"
             )
 
-            # Provas + baterias
+            # Grupos (provas) + baterias: a prova e criada automaticamente
+            # a partir dos atributos da primeira bateria de cada grupo.
             provas = []
             heat_specs = []  # (prova_index, prova, naipe, heat)
             for p in range(N_PROVAS):
                 naipe = ["M", "F", "MISTO"][p % 3]
-                prova = (
-                    await client.post(
-                        f"/api/events/{event['id']}/provas",
-                        json={
-                            "name": f"Prova {p + 1}",
-                            "order_num": p + 1,
-                            "distance_m": 100,
-                            "stroke": "livre",
-                            "naipe": naipe,
-                            "category": CATEGORY,
-                            "mixed_ranking": "both",
-                        },
-                    )
-                ).json()
-                provas.append(prova)
+                stroke = STROKES[p % len(STROKES)]
+                distance = 50 if p < len(STROKES) else 100
+                prova = None
                 for h in range(_heats_for_prova(p)):
                     heat = (
                         await client.post(
-                            f"/api/provas/{prova['id']}/heats",
+                            f"/api/events/{event['id']}/heats",
                             json={
                                 "name": f"Bateria {h + 1}",
                                 "heat_type": "bateria",
-                                "distance_m": 100,
+                                "stroke": stroke,
+                                "distance_m": distance,
+                                "naipe": naipe,
+                                "category": CATEGORY,
+                                "lane_count": LANES,
                             },
                         )
                     ).json()
+                    if prova is None:
+                        prova = {
+                            "id": heat["prova_id"],
+                            "naipe": naipe,
+                            "stroke": stroke,
+                            "distance_m": distance,
+                        }
+                        provas.append(prova)
                     heat_specs.append((p, prova, naipe, heat))
 
             # Inscricoes: atletas distintos por prova, respeitando o naipe.
@@ -183,8 +190,11 @@ async def main() -> None:
                 start = (p * 11) % (len(pool) - needed)
                 per_prova[prova["id"]] = pool[start : start + needed]
 
+            heat_positions: dict[str, int] = {}
             for p, prova, naipe, heat in heat_specs:
-                h_index = (heat["order_num"] - 1) * LANES
+                position = heat_positions.get(prova["id"], 0)
+                heat_positions[prova["id"]] = position + 1
+                h_index = position * LANES
                 chosen = per_prova[prova["id"]][h_index : h_index + LANES]
                 response = await client.post(
                     f"/api/heats/{heat['id']}/lanes",
@@ -205,7 +215,7 @@ async def main() -> None:
                 range(1, TOTAL_HEATS + 1)
             )
             log(
-                f"- {N_PROVAS} provas, {len(heats)} baterias, "
+                f"- {len(provas)} grupos (provas), {len(heats)} baterias, "
                 f"{len(heats) * LANES} inscricoes"
             )
             log()

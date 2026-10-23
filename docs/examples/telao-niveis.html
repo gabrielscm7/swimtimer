@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>SwimTimer — Telão (exemplo de níveis)</title>
+<style>
+:root{--bg:#0f1117;--bg-2:#14161f;--panel:#1a1d27;--border:#2a2d3a;--text:#e8eaf0;--muted:#9aa3b2;--lvl-prova:#a78bfa;--lvl-bateria:#22d3ee}
+*{box-sizing:border-box}html,body{height:100%}body{margin:0;background:radial-gradient(circle at top,var(--bg-2),var(--bg) 60%);color:var(--text);font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;padding:40px}
+.stage{width:min(1100px,100%);text-align:center}.seal{display:flex;justify-content:center;margin-bottom:18px}
+.level-chip{display:inline-flex;align-items:center;gap:6px;padding:4px 12px;border-radius:999px;font-size:.75rem;font-weight:800;letter-spacing:.8px;text-transform:uppercase}
+.level-chip.prova{color:var(--lvl-prova);border:1px solid var(--lvl-prova);border-left:6px solid var(--lvl-prova);background:rgba(167,139,250,.12)}
+.level-chip.bateria{color:var(--lvl-bateria);border:1px solid var(--lvl-bateria);border-left:2px solid var(--lvl-bateria);background:rgba(34,211,238,.1)}
+.heading{font-size:clamp(28px,4vw,52px);font-weight:900;letter-spacing:1px;margin:8px 0 4px}
+.heading.bateria{color:var(--lvl-bateria)}.heading.prova{color:var(--lvl-prova)}
+.name{font-size:clamp(24px,3vw,44px);font-weight:800;margin-bottom:8px}.meta{color:var(--muted);font-size:1.1rem;margin-bottom:26px}
+.podium{display:flex;align-items:flex-end;justify-content:center;gap:34px;margin:24px 0 30px}
+.pcard{background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:20px 28px;min-width:210px}
+.pcard.first{transform:scale(1.08);border-color:var(--lvl-prova)}.medal{font-size:2rem}.pname{font-size:1.25rem;font-weight:800;margin-top:6px}.pteam{color:var(--muted);font-size:.9rem}.ptime{font-family:ui-monospace,monospace;color:var(--lvl-prova);font-size:1.6rem;font-weight:800;margin-top:8px}
+.table{background:var(--panel);border:1px solid var(--border);border-left:2px solid var(--lvl-bateria);border-radius:12px;padding:14px 18px;text-align:left}
+.row{display:grid;grid-template-columns:60px 1fr 1fr 130px;gap:12px;padding:8px 0;border-bottom:1px solid var(--border)}.row:last-child{border:0}.row span{font-size:1.05rem}.row .pos{color:var(--lvl-bateria);font-weight:800}.row .time{font-family:ui-monospace,monospace;text-align:right}
+</style>
+</head>
+<body>
+<div class="stage">
+  <div class="seal"><span class="level-chip prova"><span>◆</span>PROVA</span></div>
+  <div class="heading bateria">RESULTADO DA BATERIA</div>
+  <div class="name">BATERIA 2 de 5 · Prova 3</div>
+  <div class="meta">25 m Livre · Masculino · Sub-12</div>
+  <div class="podium">
+    <div class="pcard"><div class="medal">🥈</div><div class="pname">Bia Lima</div><div class="pteam">Tubarões</div><div class="ptime">00:18.90</div></div>
+    <div class="pcard first"><div class="medal">🥇</div><div class="pname">Ana Souza</div><div class="pteam">Leões</div><div class="ptime">00:18.42</div></div>
+    <div class="pcard"><div class="medal">🥉</div><div class="pname">Caio Reis</div><div class="pteam">Golfinhos</div><div class="ptime">00:19.15</div></div>
+  </div>
+  <div class="table">
+    <div class="row"><span class="pos">1º</span><span>Ana Souza</span><span>Leões</span><span class="time">00:18.42</span></div>
+    <div class="row"><span class="pos">2º</span><span>Bia Lima</span><span>Tubarões</span><span class="time">00:18.90</span></div>
+    <div class="row"><span class="pos">3º</span><span>Caio Reis</span><span>Golfinhos</span><span class="time">00:19.15</span></div>
+  </div>
+  <div class="heading prova" style="font-size:clamp(22px,3vw,40px);margin-top:34px">RESULTADO FINAL DA PROVA</div>
+  <div class="meta">PROVA 3 · 25 m Livre · Masculino · Sub-12</div>
+</div>
+</body>
+</html>

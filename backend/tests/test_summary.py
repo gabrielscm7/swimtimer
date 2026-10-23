@@ -6,8 +6,7 @@ import pytest
 from tests.conftest import (
     create_athlete,
     create_event,
-    create_heat_in_prova,
-    create_prova,
+    create_heat,
     ready_all,
 )
 
@@ -40,35 +39,47 @@ async def _finish_heat(client, prova_id, heat, athletes):
 @pytest.mark.asyncio
 async def test_summary_has_header_progress_and_own_classification(client):
     event = await create_event(client)
-    prova = await create_prova(
+    first = await create_heat(
         client,
         event["id"],
-        name="100 Livres Misto",
+        name="Bateria 1",
+        stroke="livre",
         naipe="MISTO",
-        category="SUB-12",
+        category="mirim",
         distance_m=100,
     )
-    other = await create_prova(
-        client, event["id"], name="Outra prova", distance_m=50
+    prova = (await client.get(f"/api/provas/{first['prova_id']}")).json()
+    second = await create_heat(
+        client,
+        event["id"],
+        name="Bateria 2",
+        stroke="livre",
+        naipe="MISTO",
+        category="mirim",
+        distance_m=100,
     )
-    first = await create_heat_in_prova(client, prova["id"], name="Bateria 1")
-    second = await create_heat_in_prova(client, prova["id"], name="Bateria 2")
-    await create_heat_in_prova(client, other["id"], name="Outra bateria")
+    await create_heat(
+        client,
+        event["id"],
+        name="Outra bateria",
+        stroke="costas",
+        distance_m=50,
+    )
 
     ana = await create_athlete(
-        client, event["id"], name="Ana", naipe="F", category="SUB-12"
+        client, event["id"], name="Ana", naipe="F", category="mirim"
     )
     bia = await create_athlete(
-        client, event["id"], name="Bia", naipe="F", category="SUB-12"
+        client, event["id"], name="Bia", naipe="F", category="mirim"
     )
     await _finish_heat(client, prova["id"], first, [ana])
 
     body = (
         await client.get(f"/api/provas/{prova['id']}/summary")
     ).json()
-    assert body["name"] == "100 Livres Misto"
+    assert body["name"] == "100 m Livre · Misto · Mirim"
     assert body["naipe"] == "MISTO"
-    assert body["category"] == "SUB-12"
+    assert body["category"] == "mirim"
     assert body["distance_m"] == 100
     assert body["heat_count"] == 2
     assert body["heats_finished"] == 1

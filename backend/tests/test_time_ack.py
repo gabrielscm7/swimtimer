@@ -56,7 +56,7 @@ async def client(tmp_path):
 # --------------------------------------------------------------------------- #
 async def _event(http):
     response = await http.post(
-        "/api/events", json={"name": "Evento", "pool_length_m": 25}
+        "/api/events", json={"name": "Evento", "date": "2026-10-23", "pool_length_m": 25}
     )
     assert response.status_code == 201, response.text
     return response.json()
@@ -64,18 +64,19 @@ async def _event(http):
 
 async def _heat(http, event_id, *, heat_type="bateria", distance_m=25,
                 duration_s=None):
-    body = {"name": "Prova"}
-    if distance_m is not None:
-        body["distance_m"] = distance_m
-    prova_response = await http.post(f"/api/events/{event_id}/provas", json=body)
-    assert prova_response.status_code == 201, prova_response.text
-    prova = prova_response.json()
-    heat_body = {"name": "Bateria", "heat_type": heat_type}
+    heat_body = {
+        "heat_type": heat_type,
+        "stroke": "livre",
+        "naipe": "MISTO",
+        "category": "livre",
+    }
     if distance_m is not None:
         heat_body["distance_m"] = distance_m
     if duration_s is not None:
         heat_body["duration_s"] = duration_s
-    response = await http.post(f"/api/provas/{prova['id']}/heats", json=heat_body)
+    response = await http.post(
+        f"/api/events/{event_id}/heats", json=heat_body
+    )
     assert response.status_code == 201, response.text
     return response.json()
 
@@ -417,25 +418,26 @@ def _recv_of_type(websocket, wanted, limit=80):
 
 def _ws_event(ws_client, name):
     response = ws_client.post(
-        "/api/events", json={"name": name, "pool_length_m": 25}
+        "/api/events", json={"name": name, "date": "2026-10-23", "pool_length_m": 25}
     )
     assert response.status_code == 201, response.text
     return response.json()
 
 
 def _ws_heat(ws_client, event_id, *, heat_type="bateria", distance_m=25):
-    prova_body = {"name": "Prova"}
-    if distance_m is not None:
-        prova_body["distance_m"] = distance_m
-    prova = ws_client.post(
-        f"/api/events/{event_id}/provas", json=prova_body
-    ).json()
-    body = {"name": "Bateria", "heat_type": heat_type}
+    body = {
+        "heat_type": heat_type,
+        "stroke": "livre",
+        "naipe": "MISTO",
+        "category": "livre",
+    }
     if distance_m is not None:
         body["distance_m"] = distance_m
     if heat_type == "maratona":
         body["duration_s"] = 3600
-    response = ws_client.post(f"/api/provas/{prova['id']}/heats", json=body)
+    response = ws_client.post(
+        f"/api/events/{event_id}/heats", json=body
+    )
     assert response.status_code == 201, response.text
     return response.json()
 

@@ -55,6 +55,29 @@ def _validate_contrast(theme: dict) -> None:
         raise HTTPException(status_code=422, detail="contraste_insuficiente")
 
 
+
+
+async def _event_duplicate_warning(
+    session: AsyncSession,
+    *,
+    name: str,
+    date: str | None,
+    exclude_id: str | None = None,
+) -> list[str]:
+    if not date:
+        return []
+    query = select(Event.id).where(
+        func.lower(func.trim(Event.name)) == name.strip().lower(),
+        Event.date == date,
+    )
+    if exclude_id is not None:
+        query = query.where(Event.id != exclude_id)
+    result = await session.execute(query.limit(1))
+    if result.first() is None:
+        return []
+    return ["evento_mesmo_nome_data"]
+
+
 @router.get("/api/events")
 async def list_events(
     limit: int = Query(default=50, ge=1, le=500),
@@ -84,6 +107,7 @@ async def create_event(
         location=payload.location,
         date=payload.date,
         pool_length_m=payload.pool_length_m,
+        default_lane_count=payload.default_lane_count,
         status="draft",
         created_at=time.time(),
     )
@@ -91,7 +115,13 @@ async def create_event(
     await session.commit()
     await session.refresh(event)
     await _broadcast_server_status()
-    return await _event_payload(session, event, include_teams=True)
+    payload = await _event_payload(session, event, include_teams=True)
+    warnings = await _event_duplicate_warning(
+        session, name=event.name, date=event.date
+    )
+    if warnings:
+        payload["warnings"] = warnings
+    return payload
 
 
 @router.get("/api/events/{event_id}")
@@ -137,7 +167,16 @@ async def update_event(
         await _broadcast_settings(event)
     if previous_status != "finished" and event.status == "finished":
         await backup_service.backup_now(event.id, kind="final")
-    return await _event_payload(session, event, include_teams=True)
+    payload = await _event_payload(session, event, include_teams=True)
+    warnings = await _event_duplicate_warning(
+        session,
+        name=event.name,
+        date=event.date,
+        exclude_id=event.id,
+    )
+    if warnings:
+        payload["warnings"] = warnings
+    return payload
 
 
 @router.get("/api/events/{event_id}/presentation")

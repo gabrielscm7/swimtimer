@@ -2,9 +2,11 @@
 
 import json
 
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models import Event, Heat, Prova
+from . import provas as prova_rules
 
 DEFAULT_PRESENTATION: dict = {
     "enabled": True,
@@ -159,7 +161,7 @@ async def hydrate_presentation(
         if slide["kind"] == "prova":
             prova = await session.get(Prova, slide["target_id"])
             if prova is not None and prova.event_id == event.id:
-                item["label"] = f"{prova.order_num}. {prova.name}"
+                item["label"] = prova_rules.prova_label(prova)
                 item["status"] = prova.status
                 item["eligible"] = prova.status == "finished"
             else:
@@ -168,11 +170,25 @@ async def hydrate_presentation(
             heat = await session.get(Heat, slide["target_id"])
             if heat is not None and heat.event_id == event.id:
                 prova = await session.get(Prova, heat.prova_id)
-                prefix = (
-                    f"{prova.order_num}. {prova.name} · " if prova else ""
+                total = await session.scalar(
+                    select(func.count())
+                    .select_from(Heat)
+                    .where(Heat.prova_id == heat.prova_id)
                 )
-                item["label"] = (
-                    f"{prefix}Bateria {heat.order_num} · {heat.name}"
+                index = await session.scalar(
+                    select(func.count())
+                    .select_from(Heat)
+                    .where(
+                        Heat.prova_id == heat.prova_id,
+                        Heat.order_num <= heat.order_num,
+                    )
+                )
+                heat.heat_index_in_prova = int(index or heat.order_num)
+                heat.heats_in_prova = int(total or 1)
+                item["label"] = prova_rules.bateria_label(
+                    heat,
+                    prova,
+                    include_prova=prova is not None,
                 )
                 item["status"] = heat.status
                 item["eligible"] = heat.status == "finished"

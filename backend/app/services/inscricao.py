@@ -25,7 +25,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import settings
-from ..models import Athlete, Heat, HeatLane, Prova
+from ..domain import is_free_category
+from ..models import Athlete, Heat, HeatLane
 from .lane_actions import _client_ip, _log_action
 
 _OVERRIDE_CODES = {
@@ -99,52 +100,57 @@ async def _other_assignments(
     athlete_ids: set[str],
     *,
     exclude_heat_id: str,
-) -> list[tuple[HeatLane, Heat, Prova]]:
+) -> list[tuple[HeatLane, Heat]]:
     if not athlete_ids:
         return []
     result = await session.execute(
-        select(HeatLane, Heat, Prova)
+        select(HeatLane, Heat)
         .join(Heat, HeatLane.heat_id == Heat.id)
-        .join(Prova, Heat.prova_id == Prova.id)
         .where(HeatLane.athlete_id.in_(athlete_ids))
     )
     return [
-        (lane, heat, prova)
-        for lane, heat, prova in result.all()
+        (lane, heat)
+        for lane, heat in result.all()
         if heat.id != exclude_heat_id
     ]
 
 
-def _check_naipe(
-    athlete: Athlete, prova: Prova | None, heat: Heat
-) -> dict | None:
-    if prova is None or not prova.naipe or prova.naipe == "MISTO":
+def _check_naipe(athlete: Athlete, heat: Heat) -> dict | None:
+    if not heat.naipe or heat.naipe.upper() == "MISTO":
         return None
-    if athlete.naipe != prova.naipe:
+    if athlete.naipe.upper() != heat.naipe.upper():
         return _violation(
             "naipe_incompativel",
             athlete_id=athlete.id,
             heat_id=heat.id,
             athlete_naipe=athlete.naipe,
-            prova_naipe=prova.naipe,
+            prova_naipe=heat.naipe,
         )
     return None
 
 
-def _check_categoria(
-    athlete: Athlete, prova: Prova | None, heat: Heat
-) -> dict | None:
-    if prova is None or not prova.category:
+def _check_categoria(athlete: Athlete, heat: Heat) -> dict | None:
+    # Sem categoria (legado) ou categoria "livre" aceitam qualquer atleta.
+    if not heat.category or is_free_category(heat.category):
         return None
-    if athlete.category != prova.category:
+    athlete_category = (athlete.category or "").strip().lower()
+    if athlete_category != heat.category.strip().lower():
         return _violation(
             "categoria_incompativel",
             athlete_id=athlete.id,
             heat_id=heat.id,
             athlete_category=athlete.category,
-            prova_category=prova.category,
+            prova_category=heat.category,
         )
     return None
+
+
+def athlete_eligible(athlete: Athlete, heat: Heat) -> bool:
+    """Naipe/categoria do atleta compativeis com a bateria (ADR-012)."""
+    return (
+        _check_naipe(athlete, heat) is None
+        and _check_categoria(athlete, heat) is None
+    )
 
 
 async def check_heat_inscricao(
@@ -162,7 +168,6 @@ async def check_heat_inscricao(
         return violations
 
     athletes = await _athletes_by_id(session, set(counts))
-    prova = await session.get(Prova, heat.prova_id)
 
     # 1. Naipe / categoria de cada atleta inscrito.
     # Atleta de outro evento fica para a checagem 404 do endpoint.
@@ -170,8 +175,8 @@ async def check_heat_inscricao(
         athlete = athletes.get(athlete_id)
         if athlete is None or athlete.event_id != heat.event_id:
             continue
-        mismatch = _check_naipe(athlete, prova, heat) or _check_categoria(
-            athlete, prova, heat
+        mismatch = _check_naipe(athlete, heat) or _check_categoria(
+            athlete, heat
         )
         if mismatch:
             violations.append(mismatch)
@@ -180,8 +185,8 @@ async def check_heat_inscricao(
         session, set(counts), exclude_heat_id=heat.id
     )
 
-    # 2. Ja inscrito em outra bateria da MESMA prova.
-    for lane, other_heat, _prova in assignments:
+    # 2. Ja inscrito em outra bateria do MESMO grupo (prova).
+    for lane, other_heat in assignments:
         if other_heat.prova_id == heat.prova_id:
             violations.append(
                 _violation(
@@ -196,8 +201,8 @@ async def check_heat_inscricao(
     if any(count > 1 for count in counts.values()):
         violations.append(_violation("atleta_duplicado_na_bateria"))
 
-    # 4. Alocado em bateria ativa/ready_check de OUTRA prova.
-    for lane, other_heat, _prova in assignments:
+    # 4. Alocado em bateria ativa/ready_check de OUTRO grupo.
+    for lane, other_heat in assignments:
         if (
             other_heat.prova_id != heat.prova_id
             and other_heat.status in _ACTIVE_HEAT_STATUSES
@@ -223,14 +228,13 @@ async def check_athlete_update(
 ) -> list[dict]:
     """Valida naipe/categoria novos contra as raias ja ocupadas pelo atleta."""
     result = await session.execute(
-        select(HeatLane, Heat, Prova)
+        select(HeatLane, Heat)
         .join(Heat, HeatLane.heat_id == Heat.id)
-        .join(Prova, Heat.prova_id == Prova.id)
         .where(HeatLane.athlete_id == athlete.id)
     )
     violations: list[dict] = []
     changed = naipe != athlete.naipe or category != athlete.category
-    for _lane, heat, prova in result.all():
+    for _lane, heat in result.all():
         if changed and heat.status == "finished":
             violations.append(
                 _violation(
@@ -240,24 +244,29 @@ async def check_athlete_update(
                     heat_name=heat.name,
                 )
             )
-        if prova.naipe and prova.naipe != "MISTO" and naipe != prova.naipe:
+        if heat.naipe and heat.naipe != "MISTO" and naipe != heat.naipe:
             violations.append(
                 _violation(
                     "naipe_incompativel",
                     athlete_id=athlete.id,
                     heat_id=heat.id,
                     athlete_naipe=naipe,
-                    prova_naipe=prova.naipe,
+                    prova_naipe=heat.naipe,
                 )
             )
-        elif prova.category and category != prova.category:
+        elif (
+            heat.category
+            and not is_free_category(heat.category)
+            and (category or "").strip().lower()
+            != heat.category.strip().lower()
+        ):
             violations.append(
                 _violation(
                     "categoria_incompativel",
                     athlete_id=athlete.id,
                     heat_id=heat.id,
                     athlete_category=category,
-                    prova_category=prova.category,
+                    prova_category=heat.category,
                 )
             )
     return violations

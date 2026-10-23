@@ -22,12 +22,6 @@
     return "—";
   }
 
-  function mixedRankingLabel(value) {
-    if (value === "overall") return "Geral";
-    if (value === "by_naipe") return "Por naipe";
-    if (value === "both") return "Geral + por naipe";
-    return "Geral + por naipe";
-  }
 
   function paginationInfo(total, limit, offset) {
     const safeLimit = Math.max(1, Number(limit) || 1);
@@ -86,13 +80,6 @@
     return max + 1;
   }
 
-  function bateriaLabel(heat) {
-    if (!heat) return "Bateria";
-    return `Bateria ${heat.order_num}${
-      heat.name ? ` · ${heat.name}` : ""
-    }`;
-  }
-
   const ERROR_MESSAGES = {
     order_num_duplicado:
       "Esta ordem já está em uso. Provas têm ordem única no programa do evento; baterias têm ordem única dentro da prova.",
@@ -100,6 +87,12 @@
       "A nova ordem não corresponde a todos os itens. Recarregue a página e tente novamente.",
     prova_ja_iniciada:
       "Não é possível alterar: a prova ou bateria já foi iniciada.",
+    prova_duplicada:
+      "Já existe uma prova com este estilo, distância, naipe e categoria neste evento.",
+    prova_incompleta:
+      "Complete estilo, distância, naipe e categoria da prova antes de salvar.",
+    bateria_incompativel_com_prova:
+      "O tipo e a distância da bateria são herdados da prova.",
     bateria_ja_iniciada:
       "Não é possível alterar: a bateria já foi iniciada.",
     bateria_nao_esta_scheduled:
@@ -145,7 +138,7 @@
     distance_m_obrigatorio: "Informe a distância da bateria.",
     duration_s_obrigatorio: "Informe a duração da maratona.",
     contraste_insuficiente:
-      "Contraste abaixo de 3:1 entre texto, destaques e fundo/painel. Ajuste as cores antes de salvar.",
+      "Contraste abaixo de 3:1 entre texto, destaques, níveis e fundo/painel. Ajuste as cores antes de salvar.",
     imagem_muito_grande:
       "Imagem muito grande: use no máximo 3840 px em cada lado.",
     imagem_formato_invalido:
@@ -180,13 +173,11 @@
     athleteOptionLabel,
     athleteLabelIndex,
     naipeLabel,
-    mixedRankingLabel,
     paginationInfo,
     buildAthleteQuery,
     importResultSummary,
     distinctCategories,
     nextHeatOrder,
-    bateriaLabel,
     gestaoErrorMessage,
   };
 

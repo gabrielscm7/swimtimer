@@ -84,7 +84,14 @@ function renderRunning() {
     item.innerHTML = `
       <span>
         <strong>${escapeHtml(event.name)}</strong><br />
-        <span class="muted">${escapeHtml(heat.name)}</span>
+        <span class="muted">${escapeHtml(
+          Labels.bateriaLabel(heat, {
+            index: heat.heat_index_in_prova,
+            total: heat.heats_in_prova,
+            provaOrder: heat.prova_order_num,
+            includeProva: true,
+          })
+        )}</span>
       </span>
       <span class="timer">${clock}</span>
     `;
@@ -168,6 +175,7 @@ async function createEvent() {
   try {
     const event = await api("POST", "/api/events", {
       name: "Novo Evento",
+      date: new Date().toISOString().slice(0, 10),
       pool_length_m: 25,
     });
     window.location.href = `gestao.html?event=${event.id}`;

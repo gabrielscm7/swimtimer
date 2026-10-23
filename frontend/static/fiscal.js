@@ -424,8 +424,10 @@ function renderConfig() {
   if (chosen && chosen.participant_name) {
     const prova = provaOfHeat(configEvent, configHeat);
     els.fsPreview.textContent = `${
-      prova ? prova.name + " · " : ""
-    }${configHeat.name} · ${chosen.participant_name} · ${chosen.team || "sem equipe"}`;
+      prova ? Labels.provaLabel(prova) + " · " : ""
+    }${Labels.bateriaLabel(configHeat, {
+      includeProva: !prova,
+    })} · ${chosen.participant_name} · ${chosen.team || "sem equipe"}`;
   } else if (!lanes.length) {
     els.fsPreview.textContent = "Nenhuma raia configurada nesta bateria.";
   } else if (chosen) {
@@ -498,7 +500,16 @@ function renderWaiting() {
   els.fwLane.textContent = `RAIA ${lane.lane_number}`;
   els.fwParticipant.textContent = lane.participant_name || "Sem participante";
   els.fwTeam.textContent = lane.team || "Sem equipe";
-  els.fwHeatName.innerHTML = `<strong>${escapeHtml(currentHeat.name)}</strong>`;
+  const prova = provaOfHeat(eventDetail, currentHeat);
+  els.fwHeatName.innerHTML = `${
+    prova
+      ? `<div class="muted"><span class="level-chip prova"><span class="level-icon">◆</span>PROVA</span> ${escapeHtml(
+          Labels.provaLabel(prova)
+        )}</div>`
+      : ""
+  }<div><span class="level-chip bateria"><span class="level-icon">▸</span>BATERIA</span> <strong>${escapeHtml(
+    Labels.bateriaLabel(currentHeat, { includeProva: !prova })
+  )}</strong></div>`;
   els.fwHeatInfo.textContent = heatTypeLabel(currentHeat);
   const canReady = currentHeat.status === "ready_check";
   els.fwReady.disabled = !canReady;

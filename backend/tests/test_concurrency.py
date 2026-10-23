@@ -53,23 +53,23 @@ async def client(tmp_path):
 
 async def _event(client):
     response = await client.post(
-        "/api/events", json={"name": "Evento", "pool_length_m": 25}
+        "/api/events", json={"name": "Evento", "date": "2026-10-23", "pool_length_m": 25}
     )
     assert response.status_code == 201, response.text
     return response.json()
 
 
 async def _heat(client, event_id, **overrides):
-    body = {"name": "Prova", "heat_type": "bateria", "distance_m": 25}
+    body = {
+        "heat_type": "bateria",
+        "stroke": "livre",
+        "naipe": "MISTO",
+        "category": "livre",
+        "distance_m": 25,
+    }
     body.update(overrides)
-    prova_response = await client.post(
-        f"/api/events/{event_id}/provas",
-        json={"name": body["name"]},
-    )
-    assert prova_response.status_code == 201, prova_response.text
-    prova = prova_response.json()
     response = await client.post(
-        f"/api/provas/{prova['id']}/heats", json=body
+        f"/api/events/{event_id}/heats", json=body
     )
     assert response.status_code == 201, response.text
     return response.json()
@@ -168,16 +168,18 @@ async def test_concurrent_laps_unique_numbers(client, monkeypatch):
 async def test_concurrent_create_heat_unique_order(client):
     http, factory = client
     event = await _event(http)
-    prova = (
-        await http.post(
-            f"/api/events/{event['id']}/provas", json={"name": "Prova"}
-        )
-    ).json()
 
     async def make(index):
         return await http.post(
-            f"/api/provas/{prova['id']}/heats",
-            json={"name": f"H{index}", "heat_type": "bateria", "distance_m": 25},
+            f"/api/events/{event['id']}/heats",
+            json={
+                "name": f"H{index}",
+                "heat_type": "bateria",
+                "stroke": "livre",
+                "distance_m": 25,
+                "naipe": "MISTO",
+                "category": "livre",
+            },
         )
 
     responses = await asyncio.gather(*[make(i) for i in range(6)])
@@ -186,7 +188,7 @@ async def test_concurrent_create_heat_unique_order(client):
     async with factory() as session:
         orders = (
             await session.execute(
-                select(Heat.order_num).where(Heat.prova_id == prova["id"])
+                select(Heat.order_num).where(Heat.event_id == event["id"])
             )
         ).scalars().all()
     assert sorted(orders) == [1, 2, 3, 4, 5, 6], f"order_num colidiu: {sorted(orders)}"
@@ -274,20 +276,18 @@ async def test_concurrent_finish_distinct_lanes_same_heat(client):
 async def test_concurrent_finish_across_provas(client):
     http, factory = client
     event = await _event(http)
-    prova = (
-        await http.post(
-            f"/api/events/{event['id']}/provas", json={"name": "Prova"}
-        )
-    ).json()
     heats = []
     for index in range(2):
         heat = (
             await http.post(
-                f"/api/provas/{prova['id']}/heats",
+                f"/api/events/{event['id']}/heats",
                 json={
                     "name": f"Bateria {index}",
                     "heat_type": "bateria",
+                    "stroke": "livre",
                     "distance_m": 50,
+                    "naipe": "MISTO",
+                    "category": "livre",
                 },
             )
         ).json()
@@ -312,7 +312,7 @@ async def test_concurrent_finish_across_provas(client):
     ]
 
     classification = (
-        await http.get(f"/api/provas/{prova['id']}/classification")
+        await http.get(f"/api/provas/{heat['prova_id']}/classification")
     ).json()
     assert classification["is_provisional"] is False
     assert len(classification["standings"]) == 2

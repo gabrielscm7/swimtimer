@@ -13,6 +13,8 @@ DEFAULT_THEME: dict = {
     "muted": "#6b7280",
     "accent": "#00d4ff",
     "accent_strong": "#00b0d6",
+    "lvl_prova": "#a78bfa",
+    "lvl_bateria": "#22d3ee",
     "bg_image_url": None,
     "bg_opacity": 1.0,
     "bg_fit": "cover",
@@ -32,6 +34,8 @@ _COLOR_KEYS = (
     "muted",
     "accent",
     "accent_strong",
+    "lvl_prova",
+    "lvl_bateria",
 )
 _IMAGE_KEYS = ("bg_image_url", "logo_url")
 _TEXT_LIMITS = {"title_override": 200, "footer_text": 300}
@@ -84,6 +88,8 @@ def theme_contrast_report(theme: dict) -> dict:
     accent_strong = theme.get(
         "accent_strong", DEFAULT_THEME["accent_strong"]
     )
+    lvl_prova = theme.get("lvl_prova", DEFAULT_THEME["lvl_prova"])
+    lvl_bateria = theme.get("lvl_bateria", DEFAULT_THEME["lvl_bateria"])
     panel = theme.get("panel", DEFAULT_THEME["panel"])
     background = theme.get("bg", DEFAULT_THEME["bg"])
 
@@ -96,6 +102,10 @@ def theme_contrast_report(theme: dict) -> dict:
         "accent_bg": contrast_ratio(accent, background),
         "accent_strong_panel": contrast_ratio(accent_strong, panel),
         "accent_strong_bg": contrast_ratio(accent_strong, background),
+        "lvl_prova_panel": contrast_ratio(lvl_prova, panel),
+        "lvl_prova_bg": contrast_ratio(lvl_prova, background),
+        "lvl_bateria_panel": contrast_ratio(lvl_bateria, panel),
+        "lvl_bateria_bg": contrast_ratio(lvl_bateria, background),
     }
     text_min = min(pairs["text_panel"], pairs["text_bg"])
     report = {key: round(value, 2) for key, value in pairs.items()}

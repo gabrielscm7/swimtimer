@@ -11,7 +11,18 @@ import {
   renderAthletes,
   saveAthleteForm,
 } from "./atletas.js";
-import { deleteHeat, saveAllLanes, saveHeatForm, saveLane } from "./baterias.js";
+import {
+  allocateAthlete,
+  deleteHeat,
+  duplicateHeat,
+  loadEligibleAthletes,
+  manualLane,
+  removeLane,
+  renderHeats,
+  saveHeatForm,
+  upsertHeat,
+  upsertProva,
+} from "./baterias.js";
 import {
   createTeam,
   deleteTeam,
@@ -25,14 +36,6 @@ import {
   saveSettings,
 } from "./eventos.js";
 import { renderAppearance } from "./aparencia.js";
-import {
-  deleteProva,
-  loadClassification,
-  renderHeats,
-  saveProvaForm,
-  scheduleClassificationReload,
-  upsertProva,
-} from "./provas.js";
 import { els, eventId, state } from "./state.js";
 import {
   openSection,
@@ -80,46 +83,41 @@ els.main.addEventListener("click", (event) => {
   const target = event.target.closest("[data-action]");
   if (!target) return;
   const action = target.dataset.action;
-  if (action === "new-prova") {
-    state.provaForm = { mode: "create" };
-    renderHeats();
-  } else if (action === "edit-prova") {
-    state.provaForm = { mode: "edit", provaId: target.dataset.id };
-    state.expandedProvas.add(target.dataset.id);
-    renderHeats();
-  } else if (action === "cancel-prova-form") {
-    state.provaForm = null;
-    renderHeats();
-  } else if (action === "save-prova-form") {
-    saveProvaForm(target);
-  } else if (action === "delete-prova") {
-    deleteProva(target.dataset.id);
-  } else if (action === "toggle-prova") {
-    const id = target.dataset.id;
-    if (state.expandedProvas.has(id)) state.expandedProvas.delete(id);
-    else state.expandedProvas.add(id);
-    renderHeats();
-  } else if (action === "new-heat") {
+  if (action === "new-heat") {
+    const heats = [...state.eventData.heats].sort(
+      (a, b) => a.order_num - b.order_num
+    );
+    const previous = heats[heats.length - 1] || null;
     state.heatForm = {
       mode: "create",
-      laneCount: 3,
-      provaId: target.dataset.prova,
+      laneCount: previous
+        ? previous.lane_count
+        : state.eventData.default_lane_count || 3,
+      defaults: previous
+        ? {
+            heat_type: previous.heat_type,
+            stroke: previous.stroke,
+            naipe: previous.naipe,
+            category: previous.category,
+            distance_m: previous.distance_m,
+            duration_s: previous.duration_s,
+            lane_count: previous.lane_count,
+            classify_alone: previous.classify_alone,
+          }
+        : null,
     };
-    state.expandedProvas.add(target.dataset.prova);
     renderHeats();
   } else if (action === "edit-heat") {
     const heat = state.eventData.heats.find((item) => item.id === target.dataset.id);
     state.heatForm = {
       mode: "edit",
       heatId: target.dataset.id,
-      provaId: heat.prova_id,
-      laneCount: Math.max(
-        1,
-        heat.heat_lanes.reduce((max, lane) => Math.max(max, lane.lane_number), 0)
-      ),
+      laneCount: heat.lane_count,
     };
-    state.expandedProvas.add(heat.prova_id);
+    state.expanded.add(heat.id);
     renderHeats();
+  } else if (action === "duplicate-heat") {
+    duplicateHeat(target.dataset.id);
   } else if (action === "cancel-heat-form") {
     state.heatForm = null;
     renderHeats();
@@ -132,21 +130,18 @@ els.main.addEventListener("click", (event) => {
     if (state.expanded.has(id)) state.expanded.delete(id);
     else state.expanded.add(id);
     renderHeats();
-  } else if (action === "save-lane") {
-    saveLane(target.dataset.heat, Number(target.dataset.lane), target);
-  } else if (action === "save-all-lanes") {
-    saveAllLanes(target.dataset.heat, target);
-  } else if (action === "classification") {
-    loadClassification(target.dataset.id);
-  } else if (action === "refresh-classification") {
-    loadClassification(target.dataset.id);
+  } else if (action === "load-eligible") {
+    loadEligibleAthletes(target.dataset.heat);
+  } else if (action === "allocate-athlete") {
+    allocateAthlete(target.dataset.heat, target.dataset.athlete, target);
+  } else if (action === "remove-lane") {
+    removeLane(target.dataset.heat, Number(target.dataset.lane), target);
+  } else if (action === "manual-lane") {
+    manualLane(target.dataset.heat, Number(target.dataset.lane));
   } else if (action === "open-prova") {
-    state.expandedProvas.add(target.dataset.id);
     if (openSection("heats")) renderHeats();
   } else if (action === "open-heat") {
-    const heat = state.eventData.heats.find((item) => item.id === target.dataset.id);
     state.expanded.add(target.dataset.id);
-    if (heat) state.expandedProvas.add(heat.prova_id);
     if (openSection("heats")) renderHeats();
   } else if (action === "new-team") {
     state.teamsFormOpen = true;
@@ -262,24 +257,13 @@ window.addEventListener("beforeunload", (event) => {
 const ws = new WSClient(wsUrl(), (message) => {
   if (!state.eventData) return;
   if (message.type === "heat_state") {
-    const index = state.eventData.heats.findIndex(
-      (heat) => heat.id === message.payload.id
-    );
-    if (index >= 0) state.eventData.heats[index] = message.payload;
-    else state.eventData.heats.push(message.payload);
-    scheduleClassificationReload(message.payload.prova_id);
+    upsertHeat(message.payload);
     if (state.activeSection === "overview" && !state.dirty) renderOverview();
     renderSidebar();
   } else if (message.type === "prova_state") {
     upsertProva(message.payload);
-    scheduleClassificationReload(message.payload.id);
     if (state.activeSection === "overview" && !state.dirty) renderOverview();
-    if (
-      state.activeSection === "heats" &&
-      !state.dirty &&
-      !state.heatForm &&
-      !state.provaForm
-    ) {
+    if (state.activeSection === "heats" && !state.dirty && !state.heatForm) {
       renderHeats();
     }
   } else if (message.type === "theme_updated") {

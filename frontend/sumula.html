@@ -52,6 +52,24 @@
       .badge.provisional {
         color: #b45309;
       }
+      .level-chip {
+        display: inline-block;
+        padding: 2px 8px;
+        border-radius: 999px;
+        font-size: 0.68rem;
+        font-weight: 800;
+        letter-spacing: 0.5px;
+      }
+      .level-chip.prova {
+        color: #6d28d9;
+        border: 1px solid #6d28d9;
+        border-left: 6px solid #6d28d9;
+      }
+      .level-chip.bateria {
+        color: #0e7490;
+        border: 1px solid #0e7490;
+        border-left: 2px solid #0e7490;
+      }
       table {
         width: 100%;
         border-collapse: collapse;
@@ -136,6 +154,7 @@
       <button id="sum-print" type="button">Imprimir</button>
     </div>
     <div id="sum-content"></div>
+    <script src="/static/common/labels.js"></script>
     <script type="module" src="/static/sumula.js"></script>
   </body>
 </html>

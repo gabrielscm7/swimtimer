@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>SwimTimer — Resultados (exemplo de níveis)</title>
+<style>
+:root{--bg:#0f1117;--bg-2:#14161f;--panel:#1a1d27;--border:#2a2d3a;--text:#e8eaf0;--muted:#9aa3b2;--lvl-prova:#a78bfa;--lvl-bateria:#22d3ee;--radius:14px}
+*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at top,var(--bg-2),var(--bg) 60%);color:var(--text);font-family:system-ui,sans-serif;padding:28px}
+h1{font-size:1.4rem;margin:0 0 18px}.card{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);padding:18px;margin-bottom:16px}
+.level-card.prova{border-left:6px solid var(--lvl-prova)}.level-card.bateria{border-left:2px solid var(--lvl-bateria)}
+.level-chip{display:inline-flex;align-items:center;gap:6px;padding:3px 9px;border-radius:999px;font-size:.68rem;font-weight:800;letter-spacing:.7px;text-transform:uppercase}
+.level-chip.prova{color:var(--lvl-prova);border:1px solid var(--lvl-prova);border-left:6px solid var(--lvl-prova);background:rgba(167,139,250,.12)}
+.level-chip.bateria{color:var(--lvl-bateria);border:1px solid var(--lvl-bateria);border-left:2px solid var(--lvl-bateria);background:rgba(34,211,238,.1)}
+.level-title{display:flex;align-items:center;gap:8px;font-weight:800;text-transform:uppercase;letter-spacing:.7px;margin-bottom:10px}
+.level-title.prova{color:var(--lvl-prova)}.level-title.bateria{color:var(--lvl-bateria)}
+.meta{color:var(--muted);font-size:.85rem;margin-bottom:10px}table{width:100%;border-collapse:collapse;font-size:.9rem}
+th,td{text-align:left;padding:8px 6px;border-bottom:1px solid var(--border)}th{color:var(--muted);font-size:.7rem;text-transform:uppercase}
+.pos{color:var(--lvl-prova);font-weight:700}.bateria .pos{color:var(--lvl-bateria)}
+.help{color:var(--muted);font-size:.82rem;margin:10px 0 0}
+.battery{margin-top:18px}
+</style>
+</head>
+<body>
+<h1>Resultados — Festival de Natação</h1>
+<article class="card level-card prova">
+  <div class="level-title prova"><span class="level-chip prova"><span>◆</span>PROVA</span> PROVA 3 · 25 m Livre · Masculino · Sub-12</div>
+  <div class="meta">3 baterias finalizadas · consolidada</div>
+  <div class="level-title prova" style="font-size:.72rem"><span class="level-chip prova"><span>◆</span>PROVA</span> Resultado da PROVA</div>
+  <p class="help">Classificação consolidada de 3 baterias (menor tempo)</p>
+  <table>
+    <thead><tr><th>Pos</th><th>Atleta</th><th>Equipe</th><th>Tempo</th></tr></thead>
+    <tbody>
+      <tr><td class="pos">1º</td><td>Ana Souza</td><td>Leões</td><td>00:18.42</td></tr>
+      <tr><td class="pos">2º</td><td>Bia Lima</td><td>Tubarões</td><td>00:18.90</td></tr>
+      <tr><td class="pos">3º</td><td>Caio Reis</td><td>Golfinhos</td><td>00:19.15</td></tr>
+    </tbody>
+  </table>
+</article>
+
+<article class="card level-card bateria">
+  <div class="level-title bateria"><span class="level-chip bateria"><span>▸</span>BATERIA</span> Resultados por BATERIA</div>
+  <div class="battery">
+    <div class="level-title bateria" style="font-size:.72rem"><span class="level-chip bateria"><span>▸</span>BATERIA</span> BATERIA 2 de 3</div>
+    <table>
+      <thead><tr><th>Raia</th><th>Atleta</th><th>Equipe</th><th>Tempo</th></tr></thead>
+      <tbody>
+        <tr><td>4</td><td>Bia Lima</td><td>Tubarões</td><td>00:18.90</td></tr>
+        <tr><td>5</td><td>Caio Reis</td><td>Golfinhos</td><td>00:19.15</td></tr>
+      </tbody>
+    </table>
+  </div>
+</article>
+</body>
+</html>

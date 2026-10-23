@@ -4,6 +4,42 @@ Formato: [Semantic Versioning](https://semver.org/lang/pt-BR/)
 
 ---
 
+## [2.7.0] — 2026-10-23
+
+### Added
+- Bateria como **unidade de cadastro**; a Prova passa a ser um grupo automático
+  por `(heat_type, stroke, distance_m [só bateria de tempo], naipe, category)`
+  (ADR-012, revoga parcialmente ADR-004/007/011).
+- `heat.stroke/naipe/category/lane_count/classify_alone`; `event.default_lane_count`.
+- `POST /api/events/{id}/heats`, `PATCH /api/events/{id}/heats/order`
+  (lista completa ou `{heat_id, position}`) e
+  `GET /api/heats/{id}/eligible-athletes?team_id=`.
+- “Classificar isolada” cria um grupo próprio (badge “Isolada”).
+- Bloqueio pós-resultado de atributos de grupo, com exceção do supervisor
+  (`X-Operator-Pin` + motivo + snapshot `corrected`).
+- Migração `0015_bateria_unidade_cadastro`, reversível e testada com dados
+  legados: copia atributos da prova, converte categorias fora da lista para
+  `livre`, renumera `order_num` global e ajusta `lane_count`.
+- Tela única “Baterias” na gestão, com ordem livre (arrastar e campo numérico),
+  chips de estilo/distância/naipe/categoria, selo da prova, duplicar e criar N
+  baterias do mesmo grupo; editor de raias por equipe com atletas elegíveis.
+
+### Changed
+- `heat.order_num` passa a ser único por **evento** (`uq_heat_event_order`);
+  `event_seq = order_num`. Só baterias `scheduled` podem mudar de posição.
+- Nome da prova é sempre gerado; categorias `livre` são omitidas.
+- Prova `MISTO` sempre exibe classificação geral + por naipe; `mixed_ranking`
+  deixa de ser configurável.
+- Importação de atletas converte categorias fora da lista para `livre`.
+
+### Removed
+- CRUD e reordenação de prova (`POST/PATCH/DELETE /api/provas*`,
+  `PUT /api/events/{id}/provas/order`, `POST/PUT /api/provas/{id}/heats*`).
+- `prova.name_override`, `mixed_ranking`, `legacy_incomplete` e
+  `consolidate_results`; `gestao/provas.js` e o formulário de prova.
+
+---
+
 ## [2.6.0] — 2026-10-23
 
 ### Added
@@ -18,6 +54,25 @@ Formato: [Semantic Versioning](https://semver.org/lang/pt-BR/)
 - Evento WebSocket `presentation_updated`.
 - O telão mantém a prova ao vivo como prioridade e, sem prova ao vivo, exibe a
   curadoria definida pelo supervisor.
+- Hierarquia explícita EVENTO → PROVA → BATERIA: formato da prova, herança de
+  tipo/distância pelas baterias, nome gerado com sobrescrita opcional e
+  validação de unicidade por estilo/distância/naipe/categoria.
+- Migração `0014_prova_format_definition` com backfill de `format` e marcação
+  `legacy_incomplete` sem quebrar dados antigos.
+- Resultado da PROVA (consolidado) separado do resultado da BATERIA em
+  `resultados.html`, telão, súmula e CSV; classificação ignora baterias legadas
+  com distância divergente e expõe `warnings`.
+- Rótulos compartilhados em `frontend/static/common/labels.js` para fiscal,
+  supervisor, gestão, resultados, súmula e telão.
+- Tokens de identidade visual por nível (`--lvl-evento`, `--lvl-prova`,
+  `--lvl-bateria`), configuráveis no tema do evento e com guarda de contraste.
+- Data ISO obrigatória no evento e aviso não bloqueante para mesmo nome/data.
+
+### Changed
+- CSV de resultados ganhou a coluna `nivel` e linhas consolidadas `PROVA`
+  além das linhas por `BATERIA`.
+- O formulário de bateria não edita mais distância/tipo; ambos são herdados da
+  prova.
 
 ### Removed
 - QR Code e página pública mobile de resultados.

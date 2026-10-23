@@ -10,20 +10,24 @@ from app.models import ActionLog
 from tests.conftest import (
     create_athlete,
     create_event,
+    create_heat,
     create_heat_in_prova,
-    create_prova,
 )
 
 
-async def _prova(client, event, *, name="Prova", naipe=None, category=None):
-    return await create_prova(
+async def _prova(
+    client, event, *, name="Prova", naipe=None, category=None, stroke="livre"
+):
+    heat = await create_heat(
         client,
         event["id"],
         name=name,
-        naipe=naipe,
-        category=category,
+        stroke=stroke,
+        naipe=naipe or "MISTO",
+        category=category or "livre",
         distance_m=100,
     )
+    return (await client.get(f"/api/provas/{heat['prova_id']}")).json()
 
 
 async def _assign(client, heat_id, lanes):
@@ -89,18 +93,18 @@ async def test_prova_misto_accepts_m_and_f(client):
 
 
 @pytest.mark.asyncio
-async def test_prova_without_naipe_does_not_validate(client):
+async def test_prova_sem_naipe_e_rejeitada_na_criacao(client):
     event = await create_event(client)
-    prova = await _prova(client, event, naipe=None)
-    heat = await create_heat_in_prova(client, prova["id"])
-    female = await create_athlete(
-        client, event["id"], name="Maria", naipe="F"
+    response = await client.post(
+        f"/api/events/{event['id']}/heats",
+        json={
+            "heat_type": "bateria",
+            "stroke": "livre",
+            "distance_m": 100,
+            "category": "livre",
+        },
     )
-
-    response = await _assign(
-        client, heat["id"], [{"lane_number": 1, "athlete_id": female["id"]}]
-    )
-    assert response.status_code == 200, response.text
+    assert response.status_code == 422, response.text
 
 
 # --------------------------------------------------------------------------- #
@@ -109,10 +113,10 @@ async def test_prova_without_naipe_does_not_validate(client):
 @pytest.mark.asyncio
 async def test_categoria_incompativel_blocks(client):
     event = await create_event(client)
-    prova = await _prova(client, event, category="SUB-12")
+    prova = await _prova(client, event, category="mirim")
     heat = await create_heat_in_prova(client, prova["id"])
     athlete = await create_athlete(
-        client, event["id"], name="Ana", naipe="F", category="SUB-14"
+        client, event["id"], name="Ana", naipe="F", category="petiz"
     )
 
     response = await _assign(
@@ -125,7 +129,7 @@ async def test_categoria_incompativel_blocks(client):
 @pytest.mark.asyncio
 async def test_categoria_definida_bloqueia_atleta_sem_categoria(client):
     event = await create_event(client)
-    prova = await _prova(client, event, category="SUB-12")
+    prova = await _prova(client, event, category="mirim")
     heat = await create_heat_in_prova(client, prova["id"])
     athlete = await create_athlete(
         client, event["id"], name="Ana", naipe="F", category=None
@@ -204,8 +208,8 @@ async def test_mover_atleta_de_raia_na_mesma_bateria_e_permitido(client):
 @pytest.mark.asyncio
 async def test_atleta_em_outra_bateria_ativa(client):
     event = await create_event(client)
-    prova_a = await _prova(client, event, name="A")
-    prova_b = await _prova(client, event, name="B")
+    prova_a = await _prova(client, event, name="A", stroke="livre")
+    prova_b = await _prova(client, event, name="B", stroke="costas")
     heat_a = await create_heat_in_prova(client, prova_a["id"])
     heat_b = await create_heat_in_prova(client, prova_b["id"])
     athlete = await create_athlete(client, event["id"], name="Ana", naipe="F")
@@ -227,8 +231,8 @@ async def test_atleta_em_outra_bateria_ativa(client):
 @pytest.mark.asyncio
 async def test_atleta_em_bateria_agendada_de_outra_prova_e_permitido(client):
     event = await create_event(client)
-    prova_a = await _prova(client, event, name="A")
-    prova_b = await _prova(client, event, name="B")
+    prova_a = await _prova(client, event, name="A", stroke="livre")
+    prova_b = await _prova(client, event, name="B", stroke="costas")
     heat_a = await create_heat_in_prova(client, prova_a["id"])
     heat_b = await create_heat_in_prova(client, prova_b["id"])
     athlete = await create_athlete(client, event["id"], name="Ana", naipe="F")
@@ -300,10 +304,10 @@ async def test_update_lane_detects_duplicate_in_heat(client):
 @pytest.mark.asyncio
 async def test_athlete_patch_validates_existing_assignments(client):
     event = await create_event(client)
-    prova = await _prova(client, event, naipe="M", category="SUB-12")
+    prova = await _prova(client, event, naipe="M", category="mirim")
     heat = await create_heat_in_prova(client, prova["id"])
     athlete = await create_athlete(
-        client, event["id"], name="Mario", naipe="M", category="SUB-12"
+        client, event["id"], name="Mario", naipe="M", category="mirim"
     )
     await _assign(
         client, heat["id"], [{"lane_number": 1, "athlete_id": athlete["id"]}]
@@ -316,7 +320,7 @@ async def test_athlete_patch_validates_existing_assignments(client):
     assert naipe_response.json()["detail"] == "naipe_incompativel"
 
     category_response = await client.patch(
-        f"/api/athletes/{athlete['id']}", json={"category": "SUB-14"}
+        f"/api/athletes/{athlete['id']}", json={"category": "petiz"}
     )
     assert category_response.status_code == 422, category_response.text
     assert (

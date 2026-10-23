@@ -13,10 +13,17 @@ from tests.conftest import (
 
 async def _finished_heat(client):
     event = await create_event(client)
-    prova = await create_prova(client, event["id"], name="100 Livres")
-    heat = await create_heat_in_prova(
-        client, prova["id"], name="Bateria 1", distance_m=100
+    created = await create_heat(
+        client,
+        event["id"],
+        name="Bateria 1",
+        stroke="livre",
+        distance_m=100,
+        naipe="MISTO",
+        category="livre",
     )
+    heat = created
+    prova = (await client.get(f"/api/provas/{heat['prova_id']}")).json()
     heat = await configure_lanes(client, heat["id"], [(1, "Ana")])
     await client.post(f"/api/heats/{heat['id']}/open-ready-check")
     lane = heat["heat_lanes"][0]
@@ -59,7 +66,7 @@ async def test_presentation_default_e_persistencia(client):
     assert body["slide_duration_s"] == 20
     assert body["show_next_prova"] is False
     assert len(body["slides"]) == 2
-    assert body["slides"][0]["label"] == "1. 100 Livres"
+    assert body["slides"][0]["label"] == "PROVA 1 · 100 m Livre · Misto"
     assert body["slides"][0]["eligible"] is True
     assert body["slides"][1]["kind"] == "bateria"
     assert body["slides"][1]["eligible"] is True
@@ -97,7 +104,7 @@ async def test_results_tree_e_snapshot_history(client):
     assert body["provas"][0]["id"] == prova["id"]
     tree_heat = body["provas"][0]["heats"][0]
     assert tree_heat["id"] == heat["id"]
-    assert tree_heat["lane_count"] == 1
+    assert tree_heat["athlete_count"] == 1
     assert tree_heat["finished_count"] == 1
     assert tree_heat["result_snapshot"]["revision"] == 1
     assert "heat_lanes" not in tree_heat
@@ -113,8 +120,8 @@ async def test_results_tree_e_snapshot_history(client):
 @pytest.mark.asyncio
 async def test_exclusao_remove_refs_da_apresentacao(client):
     event = await create_event(client)
-    prova = await create_prova(client, event["id"])
-    heat = await create_heat_in_prova(client, prova["id"])
+    heat = await create_heat(client, event["id"])
+    prova = (await client.get(f"/api/provas/{heat['prova_id']}")).json()
 
     saved = await client.put(
         f"/api/events/{event['id']}/presentation",
@@ -132,14 +139,8 @@ async def test_exclusao_remove_refs_da_apresentacao(client):
     assert deleted.status_code == 204, deleted.text
 
     body = (await client.get(f"/api/events/{event['id']}/presentation")).json()
-    assert body["slides"] == [
-        {"kind": "prova", "target_id": prova["id"], "ref": f"prova:{prova['id']}", "label": "1. Prova", "status": "scheduled", "eligible": False}
-    ]
-    assert body["pinned_ref"] is None
-
-    deleted_prova = await client.delete(f"/api/provas/{prova['id']}")
-    assert deleted_prova.status_code == 204, deleted_prova.text
-    body = (await client.get(f"/api/events/{event['id']}/presentation")).json()
+    # A prova fica vazia e sem snapshots, entao tambem e removida e seus
+    # refs saem da apresentacao.
     assert body["slides"] == []
     assert body["pinned_ref"] is None
 
@@ -164,11 +165,19 @@ def test_normalize_presentation_deduplica_e_limita():
 
 def test_presentation_updated_broadcast(ws_client):
     event = ws_client.post(
-        "/api/events", json={"name": "Evento WS presentation"}
+        "/api/events", json={"name": "Evento WS presentation", "date": "2026-10-23"}
     ).json()
-    prova = ws_client.post(
-        f"/api/events/{event['id']}/provas", json={"name": "Prova"}
+    heat = ws_client.post(
+        f"/api/events/{event['id']}/heats",
+        json={
+            "heat_type": "bateria",
+            "stroke": "livre",
+            "distance_m": 25,
+            "naipe": "M",
+            "category": "livre",
+        },
     ).json()
+    prova = ws_client.get(f"/api/provas/{heat['prova_id']}").json()
 
     with ws_client.websocket_connect("/ws") as websocket:
         assert websocket.receive_json()["type"] == "server_status"

@@ -23,12 +23,12 @@ async def test_create_and_list_athlete(client):
         event["id"],
         name="Ana Souza",
         naipe="F",
-        category="sub-12",
+        category="mirim",
         team_id=team["id"],
     )
     assert athlete["name"] == "Ana Souza"
     assert athlete["naipe"] == "F"
-    assert athlete["category"] == "SUB-12"
+    assert athlete["category"] == "mirim"
     assert athlete["team_id"] == team["id"]
     assert athlete["team_name"] == "Leões"
 
@@ -89,21 +89,21 @@ async def test_list_filters_and_pagination(client):
 
     await create_athlete(
         client, event["id"], name="Ana", naipe="F",
-        category="SUB-12", team_id=leoes["id"],
+        category="mirim", team_id=leoes["id"],
     )
     await create_athlete(
         client, event["id"], name="Bia", naipe="F",
-        category="SUB-14", team_id=tubaroes["id"],
+        category="petiz", team_id=tubaroes["id"],
     )
     await create_athlete(
         client, event["id"], name="Caio", naipe="M",
-        category="SUB-12", team_id=leoes["id"],
+        category="mirim", team_id=leoes["id"],
     )
 
     url = f"/api/events/{event['id']}/athletes"
     assert (await client.get(url, params={"naipe": "M"})).json()["total"] == 1
     assert (
-        await client.get(url, params={"category": "sub-12"})
+        await client.get(url, params={"category": "mirim"})
     ).json()["total"] == 2
     assert (
         await client.get(url, params={"team_id": tubaroes["id"]})

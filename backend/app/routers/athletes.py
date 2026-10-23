@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import settings
 from ..database import get_db
+from ..domain import coerce_category
 from ..models import Athlete, HeatLane, Team
 from ..schemas import (
     AthleteCreate,
@@ -471,7 +472,7 @@ async def import_athletes(
                 team_id=team_id,
                 name=name,
                 naipe=naipe,
-                category=normalize_category(category_raw),
+                category=coerce_category(category_raw),
                 registration_code=registration_code,
                 created_at=now,
             )

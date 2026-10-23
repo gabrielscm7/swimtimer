@@ -88,10 +88,11 @@ async def create_event(
     client: AsyncClient,
     name: str = "Evento Teste",
     pool_length_m: int = 25,
+    date: str = "2026-10-23",
 ) -> dict:
     response = await client.post(
         "/api/events",
-        json={"name": name, "pool_length_m": pool_length_m},
+        json={"name": name, "date": date, "pool_length_m": pool_length_m},
     )
     assert response.status_code == 201, response.text
     return response.json()
@@ -138,31 +139,37 @@ async def create_heat(
     client: AsyncClient,
     event_id: str,
     *,
-    name: str = "Prova Teste",
+    name: str = "",
     heat_type: str = "bateria",
     distance_m: int | None = 25,
     duration_s: int | None = None,
     order_num: int | None = None,
+    stroke: str = "livre",
+    naipe: str = "MISTO",
+    category: str = "livre",
+    lane_count: int | None = None,
+    classify_alone: bool = False,
 ) -> dict:
-    body: dict = {"name": name, "heat_type": heat_type}
+    body: dict = {
+        "heat_type": heat_type,
+        "stroke": stroke,
+        "naipe": naipe,
+        "category": category,
+        "classify_alone": classify_alone,
+    }
+    if name:
+        body["name"] = name
     if distance_m is not None:
         body["distance_m"] = distance_m
     if duration_s is not None:
         body["duration_s"] = duration_s
     if order_num is not None:
         body["order_num"] = order_num
-    prova_body: dict = {"name": name}
-    if distance_m is not None:
-        prova_body["distance_m"] = distance_m
-    if order_num is not None:
-        prova_body["order_num"] = order_num
-    prova_response = await client.post(
-        f"/api/events/{event_id}/provas", json=prova_body
+    if lane_count is not None:
+        body["lane_count"] = lane_count
+    response = await client.post(
+        f"/api/events/{event_id}/heats", json=body
     )
-    assert prova_response.status_code == 201, prova_response.text
-    prova = prova_response.json()
-    body["order_num"] = 1
-    response = await client.post(f"/api/provas/{prova['id']}/heats", json=body)
     assert response.status_code == 201, response.text
     return response.json()
 
@@ -174,27 +181,31 @@ async def create_prova(
     name: str = "Prova",
     order_num: int | None = None,
     consolidate_results: bool = True,
-    distance_m: int | None = None,
+    distance_m: int | None = 25,
     stroke: str | None = None,
-    category: str | None = None,
-    naipe: str | None = None,
+    category: str = "livre",
+    naipe: str = "M",
+    format: str = "bateria",
+    name_override: bool = False,
 ) -> dict:
-    body: dict = {
-        "name": name,
-        "consolidate_results": consolidate_results,
-    }
-    if order_num is not None:
-        body["order_num"] = order_num
-    if distance_m is not None:
-        body["distance_m"] = distance_m
-    if stroke is not None:
-        body["stroke"] = stroke
-    if category is not None:
-        body["category"] = category
-    if naipe is not None:
-        body["naipe"] = naipe
-    response = await client.post(f"/api/events/{event_id}/provas", json=body)
-    assert response.status_code == 201, response.text
+    """Compatibilidade: cria uma bateria e devolve a prova derivada."""
+    if stroke is None:
+        strokes = ["livre", "costas", "peito", "borboleta", "medley"]
+        stroke = strokes[sum(ord(char) for char in name) % len(strokes)]
+    heat = await create_heat(
+        client,
+        event_id,
+        name=name if name_override else "",
+        heat_type=format,
+        distance_m=distance_m if format == "bateria" else None,
+        duration_s=7200 if format == "maratona" else None,
+        order_num=order_num,
+        stroke=stroke,
+        naipe=naipe,
+        category=category,
+    )
+    response = await client.get(f"/api/provas/{heat['prova_id']}")
+    assert response.status_code == 200, response.text
     return response.json()
 
 
@@ -203,21 +214,32 @@ async def create_heat_in_prova(
     prova_id: str,
     *,
     name: str = "Bateria",
-    heat_type: str = "bateria",
-    distance_m: int | None = 25,
+    heat_type: str | None = None,
+    distance_m: int | None = None,
     duration_s: int | None = None,
     order_num: int | None = None,
 ) -> dict:
-    body: dict = {"name": name, "heat_type": heat_type}
-    if distance_m is not None:
-        body["distance_m"] = distance_m
-    if duration_s is not None:
-        body["duration_s"] = duration_s
-    if order_num is not None:
-        body["order_num"] = order_num
-    response = await client.post(f"/api/provas/{prova_id}/heats", json=body)
-    assert response.status_code == 201, response.text
-    return response.json()
+    response = await client.get(f"/api/provas/{prova_id}")
+    assert response.status_code == 200, response.text
+    prova = response.json()
+    return await create_heat(
+        client,
+        prova["event_id"],
+        name=name,
+        heat_type=heat_type or prova["format"],
+        distance_m=(
+            distance_m
+            if distance_m is not None
+            else prova.get("distance_m")
+        )
+        if (heat_type or prova["format"]) == "bateria"
+        else None,
+        duration_s=duration_s if (heat_type or prova["format"]) == "maratona" else None,
+        order_num=order_num,
+        stroke=prova.get("stroke") or "livre",
+        naipe=prova.get("naipe") or "MISTO",
+        category=prova.get("category") or "livre",
+    )
 
 
 async def configure_lanes(

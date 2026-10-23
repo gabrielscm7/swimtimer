@@ -40,7 +40,7 @@ def test_migration_dedupes_lap_numbers(tmp_path, monkeypatch):
     con.commit()
     con.close()
 
-    command.upgrade(config, "head")
+    command.upgrade(config, "0014_prova_format_definition")
 
     con = sqlite3.connect(db)
     numbers = [
@@ -90,7 +90,7 @@ def test_migration_fixes_dangling_lane_fk(tmp_path, monkeypatch):
     con.commit()
     con.close()
 
-    command.upgrade(config, "head")
+    command.upgrade(config, "0014_prova_format_definition")
 
     con = sqlite3.connect(db)
     sql = con.execute(
@@ -133,7 +133,7 @@ def test_migration_fresh_db_has_unique_constraint(tmp_path, monkeypatch):
     )
     config = _alembic_config()
 
-    command.upgrade(config, "head")
+    command.upgrade(config, "0014_prova_format_definition")
 
     con = sqlite3.connect(db)
     tables = {
@@ -179,7 +179,7 @@ def test_migration_0005_preserves_legacy_lanes(tmp_path, monkeypatch):
     con.commit()
     con.close()
 
-    command.upgrade(config, "head")
+    command.upgrade(config, "0014_prova_format_definition")
 
     con = sqlite3.connect(db)
     lane = con.execute(
@@ -247,7 +247,7 @@ def test_migration_0007_adds_columns_and_tables(tmp_path, monkeypatch):
     con.commit()
     con.close()
 
-    command.upgrade(config, "head")
+    command.upgrade(config, "0014_prova_format_definition")
 
     con = sqlite3.connect(db)
     tables = {
@@ -302,7 +302,7 @@ def test_migration_0007_downgrade_removes_schema(tmp_path, monkeypatch):
     )
     config = _alembic_config()
 
-    command.upgrade(config, "head")
+    command.upgrade(config, "0014_prova_format_definition")
     command.downgrade(config, "0006_prova_naipe")
 
     con = sqlite3.connect(db)
@@ -352,7 +352,7 @@ def test_migration_0006_backfills_prova_naipe(tmp_path, monkeypatch):
     con.commit()
     con.close()
 
-    command.upgrade(config, "head")
+    command.upgrade(config, "0014_prova_format_definition")
 
     con = sqlite3.connect(db)
     rows = {

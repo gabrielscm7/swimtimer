@@ -74,7 +74,12 @@ async def main() -> None:
             event = (
                 await client.post(
                     "/api/events",
-                    json={"name": "Carga", "pool_length_m": 25},
+                    json={
+                        "name": "Carga",
+                        "date": "2026-10-23",
+                        "pool_length_m": 25,
+                        "default_lane_count": LANES,
+                    },
                 )
             ).json()
             teams = []
@@ -89,7 +94,7 @@ async def main() -> None:
             for index in range(ATHLETES):
                 rows.append(
                     f"Atleta {index:03d},Equipe {index % TEAMS + 1},"
-                    f"{'M' if index % 2 == 0 else 'F'},SUB-12"
+                    f"{'M' if index % 2 == 0 else 'F'},livre"
                 )
             csv_content = ("\n".join(rows) + "\n").encode("utf-8")
 
@@ -120,7 +125,7 @@ async def main() -> None:
                 read_durations.append(elapsed)
             filtered = await client.get(
                 f"/api/events/{event['id']}/athletes",
-                params={"naipe": "F", "category": "SUB-12", "limit": 50},
+                params={"naipe": "F", "category": "livre", "limit": 50},
             )
             log(
                 f"- listagem paginada: mediana {statistics.median(read_durations):.1f} ms, "
@@ -131,30 +136,30 @@ async def main() -> None:
 
             setup_start = time.perf_counter()
             provas = []
+            strokes = ["crawl", "borboleta", "peito", "costas", "livre", "medley"]
             for p in range(N_PROVAS):
-                prova = (
-                    await client.post(
-                        f"/api/events/{event['id']}/provas",
-                        json={
-                            "name": f"Prova {p + 1}",
-                            "distance_m": 100,
-                            "stroke": "livre",
-                        },
-                    )
-                ).json()
-                provas.append(prova)
+                stroke = strokes[p % len(strokes)]
+                distance = 50 if p < len(strokes) else 100
+                prova = None
                 heats_here = _heats_for_prova(p)
                 for h in range(heats_here):
                     heat = (
                         await client.post(
-                            f"/api/provas/{prova['id']}/heats",
+                            f"/api/events/{event['id']}/heats",
                             json={
                                 "name": f"Bateria {h + 1}",
                                 "heat_type": "bateria",
-                                "distance_m": 100,
+                                "stroke": stroke,
+                                "distance_m": distance,
+                                "naipe": "MISTO",
+                                "category": "livre",
+                                "lane_count": LANES,
                             },
                         )
                     ).json()
+                    if prova is None:
+                        prova = {"id": heat["prova_id"]}
+                        provas.append(prova)
                     lanes = []
                     for lane_number in range(1, LANES + 1):
                         lanes.append(

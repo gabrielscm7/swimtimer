@@ -1,6 +1,8 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
+globalThis.Labels = require("../static/common/labels.js");
+
 const {
   parseRef,
   refOf,
@@ -77,12 +79,12 @@ test("parseRef/refOf aceitam prova e bateria", () => {
 test("resolveRef calcula label e elegibilidade", () => {
   const data = eventData();
   const prova = resolveRef("prova:p1", data);
-  assert.equal(prova.label, "1. 100 Livres");
+  assert.equal(prova.label, "PROVA 1 · 100 Livres");
   assert.equal(prova.eligible, true);
   assert.equal(resolveRef("prova:p2", data).eligible, false);
 
   const heat = resolveRef("bateria:h1", data);
-  assert.equal(heat.label, "1. 100 Livres · Bateria 1 · Bateria 1");
+  assert.equal(heat.label, "BATERIA 1 · Prova 1");
   assert.equal(heat.eligible, true);
   assert.equal(resolveRef("bateria:h2", data).eligible, false);
 });
@@ -114,7 +116,7 @@ test("nextProva aponta a próxima prova distinta com bateria agendada", () => {
   const next = nextProva(data.heats, data.provas, data.heats[0]);
   assert.equal(next.prova.id, "p2");
   assert.equal(next.heat.id, "h2");
-  assert.equal(nextProvaLabel(next), "Próxima prova: 2. 50 Costas · Bateria 1");
+  assert.equal(nextProvaLabel(next), "Próxima prova: PROVA 2 · 50 Costas · BATERIA 1");
 });
 
 test("nextProva usa prova_order_num quando o heat não traz a prova", () => {

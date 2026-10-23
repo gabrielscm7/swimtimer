@@ -3,8 +3,7 @@ import pytest
 from tests.conftest import (
     configure_lanes,
     create_event,
-    create_heat_in_prova,
-    create_prova,
+    create_heat,
     ready_all,
 )
 
@@ -20,21 +19,25 @@ async def _start_heat(client, heat_id):
     return response.json()
 
 
+async def _three_heats(client):
+    event = await create_event(client)
+    first = await create_heat(client, event["id"], name="B1", stroke="livre")
+    second = await create_heat(client, event["id"], name="B2", stroke="livre")
+    third = await create_heat(client, event["id"], name="B3", stroke="livre")
+    return event, first, second, third
+
+
 @pytest.mark.asyncio
 async def test_reorder_heats_move_down(client):
-    event = await create_event(client)
-    prova = await create_prova(client, event["id"])
-    first = await create_heat_in_prova(client, prova["id"], name="B1")
-    second = await create_heat_in_prova(client, prova["id"], name="B2")
-    third = await create_heat_in_prova(client, prova["id"], name="B3")
+    event, first, second, third = await _three_heats(client)
 
-    response = await client.put(
-        f"/api/provas/{prova['id']}/heats/order",
+    response = await client.patch(
+        f"/api/events/{event['id']}/heats/order",
         json={"ids": [third["id"], first["id"], second["id"]]},
     )
     assert response.status_code == 200, response.text
 
-    heats = (await client.get(f"/api/provas/{prova['id']}/heats")).json()
+    heats = (await client.get(f"/api/events/{event['id']}/heats")).json()
     assert [(heat["name"], heat["order_num"]) for heat in heats] == [
         ("B3", 1),
         ("B1", 2),
@@ -44,19 +47,15 @@ async def test_reorder_heats_move_down(client):
 
 @pytest.mark.asyncio
 async def test_reorder_heats_move_up(client):
-    event = await create_event(client)
-    prova = await create_prova(client, event["id"])
-    first = await create_heat_in_prova(client, prova["id"], name="B1")
-    second = await create_heat_in_prova(client, prova["id"], name="B2")
-    third = await create_heat_in_prova(client, prova["id"], name="B3")
+    event, first, second, third = await _three_heats(client)
 
-    response = await client.put(
-        f"/api/provas/{prova['id']}/heats/order",
+    response = await client.patch(
+        f"/api/events/{event['id']}/heats/order",
         json={"ids": [second["id"], third["id"], first["id"]]},
     )
     assert response.status_code == 200, response.text
 
-    heats = (await client.get(f"/api/provas/{prova['id']}/heats")).json()
+    heats = (await client.get(f"/api/events/{event['id']}/heats")).json()
     assert [(heat["name"], heat["order_num"]) for heat in heats] == [
         ("B2", 1),
         ("B3", 2),
@@ -66,29 +65,23 @@ async def test_reorder_heats_move_up(client):
 
 @pytest.mark.asyncio
 async def test_reorder_heats_rejects_invalid_ids(client):
-    event = await create_event(client)
+    event, first, second, _third = await _three_heats(client)
     other_event = await create_event(client, name="Outro")
-    prova = await create_prova(client, event["id"])
-    other_prova = await create_prova(client, other_event["id"])
-    first = await create_heat_in_prova(client, prova["id"], name="B1")
-    second = await create_heat_in_prova(client, prova["id"], name="B2")
-    foreign = await create_heat_in_prova(
-        client, other_prova["id"], name="Externa"
-    )
-    url = f"/api/provas/{prova['id']}/heats/order"
+    foreign = await create_heat(client, other_event["id"], name="Externa")
+    url = f"/api/events/{event['id']}/heats/order"
 
-    missing = await client.put(url, json={"ids": [first["id"]]})
+    missing = await client.patch(url, json={"ids": [first["id"]]})
     assert missing.status_code == 400
     assert missing.json()["detail"] == "ordem_ids_invalidos"
 
-    duplicated = await client.put(
+    duplicated = await client.patch(
         url, json={"ids": [first["id"], second["id"], second["id"]]}
     )
     assert duplicated.status_code == 400
     assert duplicated.json()["detail"] == "ordem_ids_invalidos"
 
-    foreign_response = await client.put(
-        url, json={"ids": [first["id"], foreign["id"]]}
+    foreign_response = await client.patch(
+        url, json={"ids": [first["id"], second["id"], foreign["id"]]}
     )
     assert foreign_response.status_code == 400
     assert foreign_response.json()["detail"] == "ordem_ids_invalidos"
@@ -96,96 +89,73 @@ async def test_reorder_heats_rejects_invalid_ids(client):
 
 @pytest.mark.asyncio
 async def test_reorder_heats_blocks_started_heat(client):
-    event = await create_event(client)
-    prova = await create_prova(client, event["id"])
-    first = await create_heat_in_prova(client, prova["id"], name="B1")
-    second = await create_heat_in_prova(client, prova["id"], name="B2")
+    event, first, second, _third = await _three_heats(client)
     await _start_heat(client, first["id"])
 
-    response = await client.put(
-        f"/api/provas/{prova['id']}/heats/order",
-        json={"ids": [second["id"], first["id"]]},
+    response = await client.patch(
+        f"/api/events/{event['id']}/heats/order",
+        json={"heat_id": first["id"], "position": 3},
     )
     assert response.status_code == 409
-    assert response.json()["detail"] == "bateria_ja_iniciada"
+    assert response.json()["detail"] == "bateria_ancorada"
 
 
 @pytest.mark.asyncio
-async def test_reorder_provas_move_down(client):
+async def test_reorder_interleaved_groups(client):
+    """Ordem intercalada A1, B1, A2, B2 preserva a classificacao por grupo."""
     event = await create_event(client)
-    first = await create_prova(client, event["id"], name="P1")
-    second = await create_prova(client, event["id"], name="P2")
-    third = await create_prova(client, event["id"], name="P3")
+    a1 = await create_heat(client, event["id"], name="A1", stroke="livre")
+    a2 = await create_heat(client, event["id"], name="A2", stroke="livre")
+    b1 = await create_heat(client, event["id"], name="B1", stroke="costas")
+    b2 = await create_heat(client, event["id"], name="B2", stroke="costas")
+    assert a1["prova_id"] == a2["prova_id"]
+    assert b1["prova_id"] == b2["prova_id"]
+    assert a1["prova_id"] != b1["prova_id"]
 
-    response = await client.put(
-        f"/api/events/{event['id']}/provas/order",
-        json={"ids": [third["id"], first["id"], second["id"]]},
+    response = await client.patch(
+        f"/api/events/{event['id']}/heats/order",
+        json={"ids": [a1["id"], b1["id"], a2["id"], b2["id"]]},
     )
     assert response.status_code == 200, response.text
 
+    heats = (await client.get(f"/api/events/{event['id']}/heats")).json()
+    assert [heat["name"] for heat in heats] == ["A1", "B1", "A2", "B2"]
+    assert [heat["event_seq"] for heat in heats] == [1, 2, 3, 4]
+    assert [heat["heat_index_in_prova"] for heat in heats] == [1, 1, 2, 2]
+
     provas = (await client.get(f"/api/events/{event['id']}/provas")).json()
-    assert [(prova["name"], prova["order_num"]) for prova in provas] == [
-        ("P3", 1),
-        ("P1", 2),
-        ("P2", 3),
-    ]
+    by_id = {prova["id"]: prova for prova in provas}
+    assert by_id[a1["prova_id"]]["heat_orders"] == [1, 3]
+    assert by_id[b1["prova_id"]]["heat_orders"] == [2, 4]
+    assert by_id[a1["prova_id"]]["order_num"] == 1
+    assert by_id[b1["prova_id"]]["order_num"] == 2
 
 
 @pytest.mark.asyncio
-async def test_reorder_provas_rejects_foreign_id(client):
-    event = await create_event(client)
-    other_event = await create_event(client, name="Outro")
-    own = await create_prova(client, event["id"], name="P1")
-    foreign = await create_prova(client, other_event["id"], name="Externa")
+async def test_move_heat_to_position(client):
+    event, first, second, third = await _three_heats(client)
 
-    response = await client.put(
-        f"/api/events/{event['id']}/provas/order",
-        json={"ids": [own["id"], foreign["id"]]},
+    response = await client.patch(
+        f"/api/events/{event['id']}/heats/order",
+        json={"heat_id": third["id"], "position": 1},
     )
-    assert response.status_code == 400
-    assert response.json()["detail"] == "ordem_ids_invalidos"
+    assert response.status_code == 200, response.text
+
+    heats = (await client.get(f"/api/events/{event['id']}/heats")).json()
+    assert [heat["name"] for heat in heats] == ["B3", "B1", "B2"]
+    assert [heat["order_num"] for heat in heats] == [1, 2, 3]
 
 
 @pytest.mark.asyncio
-async def test_reorder_provas_blocks_started_prova(client):
+async def test_heat_order_is_unique_per_event(client):
     event = await create_event(client)
-    first = await create_prova(client, event["id"], name="P1")
-    second = await create_prova(client, event["id"], name="P2")
-    heat = await create_heat_in_prova(client, first["id"], name="B1")
-    await _start_heat(client, heat["id"])
-
-    response = await client.put(
-        f"/api/events/{event['id']}/provas/order",
-        json={"ids": [second["id"], first["id"]]},
+    first = await create_heat(
+        client, event["id"], name="B1", stroke="livre", order_num=1
     )
-    assert response.status_code == 409
-    assert response.json()["detail"] == "prova_ja_iniciada"
-
-
-@pytest.mark.asyncio
-async def test_heat_order_can_repeat_across_different_provas(client):
-    """Regressao: ordem de bateria e unica por PROVA, nunca por evento."""
-    event = await create_event(client)
-    prova_a = await create_prova(client, event["id"], name="Peito")
-    prova_b = await create_prova(client, event["id"], name="Costas")
-
-    first = await create_heat_in_prova(
-        client, prova_a["id"], name="Bateria 1", order_num=1
-    )
-    second = await create_heat_in_prova(
-        client, prova_b["id"], name="Bateria 1", order_num=1
+    second = await create_heat(
+        client, event["id"], name="B2", stroke="costas", order_num=1
     )
     assert first["order_num"] == 1
     assert second["order_num"] == 1
-
-    duplicate = await client.post(
-        f"/api/provas/{prova_a['id']}/heats",
-        json={
-            "name": "Duplicada",
-            "heat_type": "bateria",
-            "distance_m": 50,
-            "order_num": 1,
-        },
-    )
-    assert duplicate.status_code == 400
-    assert duplicate.json()["detail"] == "order_num_duplicado"
+    heats = (await client.get(f"/api/events/{event['id']}/heats")).json()
+    assert [heat["order_num"] for heat in heats] == [1, 2]

@@ -18,14 +18,14 @@ async def _setup_started(client, name: str = "Maria Silva") -> tuple:
     event = await create_event(client, name="Evento Snapshots")
     team = await create_team(client, event["id"], "Equipe Azul")
     heat = await create_heat(
-        client, event["id"], name="50 Livres", heat_type="bateria", distance_m=50
+        client, event["id"], name="50 Livres", heat_type="bateria", distance_m=50, lane_count=4
     )
     athlete = await create_athlete(
         client,
         event["id"],
         name=name,
         naipe="F",
-        category="SENIOR",
+        category="adulto",
         team_id=team["id"],
     )
     response = await client.post(
@@ -79,7 +79,7 @@ async def test_finish_creates_provisional_revision(client):
     assert lane["lane_number"] == 4
     assert lane["athlete"]["name"] == "Maria Silva"
     assert lane["athlete"]["naipe"] == "F"
-    assert lane["athlete"]["category"] == "SENIOR"
+    assert lane["athlete"]["category"] == "adulto"
     assert lane["team_name"] == "Equipe Azul"
     assert lane["race_time_ms"] is not None
     assert rows[0].prev_hash == snapshots.GENESIS

@@ -1,9 +1,9 @@
 // Sequencia canonica de baterias — pura e testavel com `node --test`.
 //
-// `heat.order_num` e unico apenas DENTRO da prova (reinicia em 1). A unica
-// ordem correta entre provas e `event_seq`, calculado no backend por
-// (prova.order_num, heat.order_num). Nenhum cliente deve ordenar por
-// `order_num` isolado.
+// Desde o ADR-012, `heat.order_num` e unico por EVENTO e representa a ordem
+// livre do programa. O backend expoe `event_seq = order_num`; clientes devem
+// usar `event_seq` (nunca `prova.order_num` nem `order_num` isolado) para a
+// sequencia canonica entre grupos intercalados.
 (function (root) {
   function heatSeq(heat) {
     const value = Number(heat && heat.event_seq);
@@ -50,20 +50,13 @@
 
   function nextProvaAfter(heats, provas, heat) {
     if (!heat) return null;
-    const current = (provas || []).find(
-      (prova) => prova.id === heat.prova_id
-    );
-    const currentOrder = current ? Number(current.order_num) : 0;
-    const candidates = [...(provas || [])]
-      .filter((prova) => Number(prova.order_num) > currentOrder)
-      .sort((a, b) => Number(a.order_num) - Number(b.order_num));
-    for (const prova of candidates) {
-      const next = heatsSorted(heats).find(
-        (item) => item.prova_id === prova.id && item.status === "scheduled"
-      );
-      if (next) return { prova, heat: next };
-    }
-    return null;
+    // A proxima prova e a do proximo item agendado na ordem global, o que
+    // funciona tambem quando grupos estao intercalados (A1, B1, A2, B2).
+    const seq = Number(heat.event_seq);
+    const next = nextScheduledAfter(heats, seq);
+    if (!next) return null;
+    const prova = (provas || []).find((item) => item.id === next.prova_id);
+    return prova ? { prova, heat: next } : null;
   }
 
   function heatPosition(heat) {
@@ -87,6 +80,16 @@
 
   function provaHeaderLabel(heat) {
     if (!heat) return "";
+    const api =
+      typeof globalThis !== "undefined" ? globalThis.Labels : null;
+    if (api) {
+      return api.bateriaLabel(heat, {
+        index: heat.heat_index_in_prova,
+        total: heat.heats_in_prova,
+        provaOrder: heat.prova_order_num,
+        includeProva: true,
+      });
+    }
     const label = provaLabel(heat);
     const position = heatPosition(heat);
     if (!position) return label;

@@ -15,6 +15,8 @@ const COLOR_FIELDS = [
   ["muted", "Texto suave"],
   ["accent", "Destaque"],
   ["accent_strong", "Destaque forte"],
+  ["lvl_prova", "Nível prova"],
+  ["lvl_bateria", "Nível bateria"],
 ];
 
 const POSITIONS = [
@@ -180,11 +182,13 @@ function updateContrast() {
   setFieldError(
     "theme-error",
     report.blocked
-      ? "Contraste abaixo de 3:1 em texto, destaque ou texto suave. Ajuste as cores para salvar."
+      ? "Contraste abaixo de 3:1 em texto, destaque, níveis ou texto suave. Ajuste as cores para salvar."
       : ""
   );
   if (!box) return;
   const values = `texto ${report.textMin.toFixed(
+    2
+  )}:1 · níveis ${report.levelMin.toFixed(
     2
   )}:1 · menor contraste ${report.min.toFixed(2)}:1`;
   box.classList.toggle("blocked", report.blocked);

@@ -7,6 +7,8 @@
     muted: "#6b7280",
     accent: "#00d4ff",
     accent_strong: "#00b0d6",
+    lvl_prova: "#a78bfa",
+    lvl_bateria: "#22d3ee",
     bg_image_url: null,
     bg_opacity: 1,
     bg_fit: "cover",
@@ -26,6 +28,8 @@
     "muted",
     "accent",
     "accent_strong",
+    "lvl_prova",
+    "lvl_bateria",
   ];
   const FITS = ["cover", "contain", "center"];
   const HEX_RE = /^#[0-9a-fA-F]{6}$/;
@@ -43,6 +47,8 @@
       muted: "#445066",
       accent: "#005fcc",
       accent_strong: "#004a9e",
+      lvl_prova: "#6d28d9",
+      lvl_bateria: "#0e7490",
     },
     escuro_neutro: {
       ...DEFAULT_THEME,
@@ -53,6 +59,8 @@
       muted: "#9a9a9a",
       accent: "#9ecbff",
       accent_strong: "#6fa8dc",
+      lvl_prova: "#c4b5fd",
+      lvl_bateria: "#67e8f9",
     },
   };
 
@@ -158,14 +166,25 @@
       accentBg: contrastRatio(theme.accent, theme.bg),
       accentStrongPanel: contrastRatio(theme.accent_strong, theme.panel),
       accentStrongBg: contrastRatio(theme.accent_strong, theme.bg),
+      lvlProvaPanel: contrastRatio(theme.lvl_prova, theme.panel),
+      lvlProvaBg: contrastRatio(theme.lvl_prova, theme.bg),
+      lvlBateriaPanel: contrastRatio(theme.lvl_bateria, theme.panel),
+      lvlBateriaBg: contrastRatio(theme.lvl_bateria, theme.bg),
     };
     const textMin = Math.min(pairs.textPanel, pairs.textBg);
+    const levelMin = Math.min(
+      pairs.lvlProvaPanel,
+      pairs.lvlProvaBg,
+      pairs.lvlBateriaPanel,
+      pairs.lvlBateriaBg
+    );
     const min = Math.min(...Object.values(pairs));
     return {
       ...pairs,
       textMin,
+      levelMin,
       min,
-      warning: textMin < 4.5,
+      warning: textMin < 4.5 || levelMin < 4.5,
       blocked: min < 3,
     };
   }

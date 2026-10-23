@@ -1,6 +1,6 @@
-# SPEC — SwimTimer v2.4
-**Versão:** 2.4  
-**Data:** 2026-10-22  
+# SPEC — SwimTimer v2.6
+**Versão:** 2.6
+**Data:** 2026-10-23
 **Status:** Implementado
 
 ---
@@ -58,12 +58,16 @@
 
 ```
 Event
-  id, name, location, date, pool_length_m (25|50)
+  id, name, location, date (ISO YYYY-MM-DD, obrigatório em novos eventos)
+  pool_length_m (25|50), default_lane_count (1–8, padrão 3)
   status (draft|active|finished), created_at
 
-Prova
-  id, event_id, name, order_num, stroke, distance_m, naipe (M|F|nulo), category
-  consolidate_results (padrão true), classification_criterion (lowest_time)
+Prova (grupo derivado; NÃO é cadastrada)
+  id, event_id, name (sempre gerado), order_num (derivado)
+  format (bateria|maratona), stroke (crawl|borboleta|peito|costas|livre|medley)
+  distance_m, naipe (M|F|MISTO)
+  category (pre_mirim|mirim|petiz|infantil|juvenil|junior|adulto|livre)
+  classification_criterion (lowest_time)
   status (scheduled|in_progress|finished), created_at
 
 Team
@@ -73,9 +77,10 @@ Athlete
   id, event_id, team_id (opcional), name, naipe (M|F), category
   created_at, updated_at
 
-Heat (bateria)
-  id, event_id, prova_id, name, order_num (único por prova)
-  heat_type (maratona|bateria), distance_m, duration_s
+Heat (bateria — unidade de cadastro)
+  id, event_id, prova_id (grupo automático), name, order_num (único por evento)
+  heat_type (maratona|bateria), stroke, naipe, category
+  distance_m, duration_s, lane_count (1–8), classify_alone
   status (scheduled|ready_check|active|finished)
   started_at, finished_at
 
@@ -96,10 +101,11 @@ ProcessedOp
   op_id (PK), lane_id, action, result_json, created_at
 ```
 
-> Hierarquia: **Evento → Prova → Bateria → Raia/Atleta → Resultado**.
-> Cada `Heat` (bateria) pertence a uma `Prova`; cada prova pertence a um
-> `Evento`. A referência redundante `heat.event_id` é mantida por
-> compatibilidade e eficiência, mas a autoridade é `heat.prova_id`.
+> Hierarquia: **Evento → Bateria → Raia/Atleta → Resultado**. A `Prova` é um
+> grupo automático de baterias com a mesma chave
+> `(heat_type, stroke, distance_m [só bateria de tempo], naipe, category)`.
+> `classify_alone=true` cria um grupo exclusivo. A prova é criada, renumerada e
+> removida pelo backend; não há CRUD de prova.
 >
 > `Athlete` é o cadastro único do atleta dentro do evento. `HeatLane.atleta_id`
 > é opcional: quando presente, nome e equipe exibidos na raia são derivados do
@@ -107,14 +113,35 @@ ProcessedOp
 > clientes legados). Raias antigas sem atleta continuam válidas via
 > `participant_name` livre.
 >
-> **Ordens:** `prova.order_num` é único no **evento** (posição no programa) e
-> `heat.order_num` é único dentro da **prova** (reinicia em 1 a cada prova).
-> Reordenações (arrastar-e-soltar) usam endpoints batch que reatribuem 1..N em
-> uma única transação, evitando colisões temporárias com o índice único.
+> **Ordens:** `heat.order_num` é único no **evento** (`uq_heat_event_order`) e
+> representa a ordem livre do programa. `event_seq = order_num`;
+> `heat_index_in_prova` é a posição entre as baterias do mesmo grupo nessa
+> ordem. `prova.order_num` é derivado (menor `order_num` do grupo) e renumerado
+> 1..N. Reordenação usa `PATCH /api/events/{id}/heats/order` (lista completa ou
+> `{heat_id, position}`) em uma transação sob o lock do evento. Só baterias
+> `scheduled` mudam de posição; as demais ficam ancoradas (`409 bateria_ancorada`).
 >
-> **Naipe da prova:** `prova.naipe` (`M`/`F`, opcional) é separado de
-> `prova.category` (categoria de idade, ex.: `SUB-12`). A migração 0006 extrai
-> o naipe de textos legados tipo "masculino, sub-12" e limpa a categoria.
+> **Naipe e categoria:** `heat.naipe` (`M`/`F`/`MISTO`) e `heat.category`
+> (lista fechada; `livre` = sem restrição etária, exibida como "Cat. Livre").
+> Elegibilidade: naipe do atleta = bateria (ou `MISTO`); categoria do atleta =
+> bateria (ou bateria `livre`); atleta não pode repetir no mesmo grupo.
+> `GET /api/heats/{id}/eligible-athletes?team_id=` filtra a equipe e marca os
+> já alocados no grupo.
+>
+> **Grupo e nome (v2.7):** a prova espelha `heat_type/stroke/distance_m/naipe/
+> category` da bateria. O nome é sempre gerado (`25 m Crawl · Masculino ·
+> Mirim`); `livre` é omitida e maratonas usam `Maratona 2 h · …`. Prova sem
+> baterias e sem snapshots é removida. `MISTO` sempre exibe geral + por naipe.
+>
+> **Legado:** a migração `0015` copia atributos da prova para cada bateria,
+> converte categorias fora da lista para `livre` (inclusive `ABERTA`), renumera
+> `order_num` global e ajusta `lane_count` pelas raias existentes. Campos nulos
+> antigos são sinalizados como `legacy_incomplete` na gestão.
+>
+> **Bloqueio pós-resultado:** bateria `finished` não altera estilo, distância,
+> naipe nem categoria (`409 bateria_com_resultado`), salvo `force=true` +
+> `override_reason` + `X-Operator-Pin`, que registra `override_grupo` e snapshot
+> `corrected` (`reason=correcao_grupo`).
 
 ### 3.2 Tabelas SQL
 
@@ -125,6 +152,7 @@ CREATE TABLE event (
     location       TEXT,
     date           TEXT,              -- ISO date string
     pool_length_m  INTEGER NOT NULL,  -- 25 ou 50
+    default_lane_count INTEGER NOT NULL DEFAULT 3,  -- 1..8
     status         TEXT DEFAULT 'draft',  -- draft|active|finished
     created_at     REAL NOT NULL
 );
@@ -153,13 +181,13 @@ CREATE UNIQUE INDEX uq_athlete_event_name_team
 CREATE TABLE prova (
     id                        TEXT PRIMARY KEY,
     event_id                  TEXT NOT NULL REFERENCES event(id),
-    name                      TEXT NOT NULL,
-    order_num                 INTEGER NOT NULL,
-    stroke                    TEXT,
+    name                      TEXT NOT NULL,       -- sempre gerado
+    order_num                 INTEGER NOT NULL,    -- derivado, renumerado 1..N
+    format                    TEXT NOT NULL DEFAULT 'bateria',
+    stroke                    TEXT,                -- espelha o grupo
     distance_m                INTEGER,
-    naipe                     TEXT,          -- M|F (opcional)
-    category                  TEXT,          -- categoria de idade (ex.: SUB-12)
-    consolidate_results       BOOLEAN NOT NULL DEFAULT 1,
+    naipe                     TEXT,
+    category                  TEXT,
     classification_criterion  TEXT NOT NULL DEFAULT 'lowest_time',
     status                    TEXT NOT NULL DEFAULT 'scheduled',
     created_at                REAL NOT NULL,
@@ -167,18 +195,23 @@ CREATE TABLE prova (
 );
 
 CREATE TABLE heat (
-    id           TEXT PRIMARY KEY,
-    event_id     TEXT NOT NULL REFERENCES event(id),
-    prova_id     TEXT NOT NULL REFERENCES prova(id),
-    name         TEXT NOT NULL,
-    order_num    INTEGER NOT NULL,
-    heat_type    TEXT NOT NULL,      -- maratona|bateria
-    distance_m   INTEGER,            -- bateria
-    duration_s   INTEGER,            -- maratona
-    status       TEXT DEFAULT 'scheduled',
-    started_at   REAL,
-    finished_at  REAL,
-    UNIQUE (prova_id, order_num)
+    id             TEXT PRIMARY KEY,
+    event_id       TEXT NOT NULL REFERENCES event(id),
+    prova_id       TEXT NOT NULL REFERENCES prova(id),
+    name           TEXT NOT NULL DEFAULT '',
+    order_num      INTEGER NOT NULL,
+    heat_type      TEXT NOT NULL,   -- maratona|bateria
+    stroke         TEXT,            -- crawl|borboleta|peito|costas|livre|medley
+    naipe          TEXT,            -- M|F|MISTO
+    category       TEXT,            -- lista fechada; livre = sem restricao
+    classify_alone BOOLEAN NOT NULL DEFAULT 0,
+    lane_count     INTEGER NOT NULL DEFAULT 3,
+    distance_m     INTEGER,         -- bateria
+    duration_s     INTEGER,         -- maratona
+    status         TEXT DEFAULT 'scheduled',
+    started_at     REAL,
+    finished_at    REAL,
+    UNIQUE (event_id, order_num)
 );
 
 CREATE TABLE heat_lane (
@@ -270,33 +303,46 @@ Regras de importação:
 - Limites: 2 MB por arquivo e 1000 linhas; validação de extensão + magic bytes
   (XLSX) e decodificação UTF-8/UTF-8-BOM/Latin-1 (CSV).
 
-### Provas
+### Provas (grupo derivado, somente leitura)
 ```
-POST   /api/events/{event_id}/provas             → criar prova
-GET    /api/events/{event_id}/provas             → listar (com baterias)
-GET    /api/provas/{prova_id}                    → detalhe
-PATCH  /api/provas/{prova_id}                    → editar
-DELETE /api/provas/{prova_id}                    → deletar (só se todas as baterias scheduled)
-PUT    /api/events/{event_id}/provas/order       → reordenar provas (body {ids:[...]})
-GET    /api/provas/{prova_id}/classification     → classificação consolidada
-POST   /api/provas/{prova_id}/heats              → criar bateria na prova
-GET    /api/provas/{prova_id}/heats              → listar baterias
-PUT    /api/provas/{prova_id}/heats/order        → reordenar baterias (body {ids:[...]})
+GET    /api/events/{event_id}/provas         → listar grupos (com baterias)
+GET    /api/provas/{prova_id}                → detalhe derivado
+GET    /api/provas/{prova_id}/heats          → baterias do grupo
+GET    /api/provas/{prova_id}/classification → classificação consolidada
+GET    /api/provas/{prova_id}/summary        → cabeçalho + progresso + ranking
 ```
 
-Reordenação: o body deve conter **todos** os IDs do escopo (evento para provas,
-prova para baterias), sem duplicatas. Violações retornam `400 ordem_ids_invalidos`;
-itens já iniciados retornam `409 prova_ja_iniciada`.
+Não existem mais `POST/PATCH/DELETE /api/provas*` nem reordenação de prova: a
+prova é criada, renumerada e removida automaticamente pelo serviço de baterias.
+Editar atributos de uma bateria pode movê-la de grupo e recalcular a
+classificação dos dois grupos.
 
-### Baterias
+### Baterias (unidade de cadastro)
 ```
-GET    /api/events/{event_id}/heats            → listar em ordem (prova → bateria)
-PATCH  /api/heats/{heat_id}                    → atualizar (order_num único por prova)
+POST   /api/events/{event_id}/heats            → criar bateria (grupo automático)
+GET    /api/events/{event_id}/heats            → listar em ordem global (order_num)
+PATCH  /api/events/{event_id}/heats/order      → reordenar/mover posição
+PATCH  /api/heats/{heat_id}                    → atualizar atributos (move grupo)
 DELETE /api/heats/{heat_id}                    → deletar (só se scheduled)
+GET    /api/heats/{heat_id}                    → detalhe + snapshot
+GET    /api/heats/{heat_id}/eligible-athletes  → ?team_id= (marca alocados no grupo)
 POST   /api/heats/{heat_id}/open-ready-check   → status → ready_check
 POST   /api/heats/{heat_id}/start              → status → active (exige todas prontas)
 POST   /api/heats/{heat_id}/abort              → volta para scheduled
 ```
+
+`PATCH .../heats/order` aceita **lista completa** `{ids:[...]}` (conjunto exato
+de IDs do evento) ou movimentação `{heat_id, position}`. Só baterias
+`scheduled` mudam de posição; qualquer tentativa de mover item iniciado/finalizado
+retorna `409 bateria_ancorada`. O conjunto inválido retorna
+`400 ordem_ids_invalidos`. A operação é atômica sob o lock do evento e
+renumera as provas automaticamente.
+
+`PATCH /api/heats/{heat_id}` não aceita `order_num` (use o endpoint de ordem).
+Bateria `finished` com mudança de estilo/distância/naipe/categoria retorna
+`409 bateria_com_resultado`; a exceção exige `force=true`,
+`override_reason` e header `X-Operator-Pin`, registrando snapshot `corrected`
+(`reason=correcao_grupo`) e `action_log` (`override_grupo`).
 
 ### Equipes / logos
 ```
@@ -330,6 +376,26 @@ DELETE /api/lanes/{lane_id}/lap/last  → desfazer última volta (maratona, < 30
 - Volta repetida na mesma raia a menos de `MIN_LAP_INTERVAL_S` (padrão 5 s)
   retorna `409 volta_duplicada`.
 
+### Regras de validação da bateria (v2.7)
+
+- `422`: ausência/invalidez de `stroke`, `naipe`, `category`, `distance_m`
+  (bateria), `duration_s` (maratona), `lane_count` (1–8) ou data do evento.
+- Estilos: `crawl`, `borboleta`, `peito`, `costas`, `livre`, `medley`.
+- Categorias: `pre_mirim`, `mirim`, `petiz`, `infantil`, `juvenil`, `junior`,
+  `adulto`, `livre` (interface: “Cat. Livre”).
+- `422 grupo_incompleto`: edição de bateria legada sem completar
+  estilo/naipe/categoria; `422 distance_m_obrigatorio` / `duration_s_obrigatorio`
+  conforme o tipo; `422 campo_incompativel_bateria` / `lane_count_menor_que_raias`.
+- `422 raia_acima_de_lane_count`: raia > `heat.lane_count`.
+- `409 bateria_com_resultado`: grupo alterado após resultado sem override.
+- `409 bateria_ancorada`: mover bateria não `scheduled`.
+- `422`/`409` de inscrição: `naipe_incompativel`, `categoria_incompativel`,
+  `atleta_duplicado_na_prova` (mesmo grupo), `atleta_duplicado_na_bateria`,
+  `atleta_em_outra_bateria_ativa`, `atleta_com_resultado`.
+- `warnings=["evento_mesmo_nome_data"]`: aviso não bloqueante ao criar/editar
+  evento com mesmo nome e data.
+- Importação: categorias fora da lista são convertidas para `livre`.
+
 ### Resultados internos e apresentação
 ```
 GET    /api/events/{event_id}/results        → árvore prova → bateria (leve)
@@ -344,6 +410,31 @@ A curadoria é persistida em `event.presentation_json`:
 sem prova ao vivo, exibe os slides elegíveis; o rodapé de “próxima prova” é
 opcional. A página interna (`resultados.html`) usa a árvore, o summary da prova
 e o histórico de snapshots.
+
+### Identidade visual por nível (v2.6)
+
+- Tokens: `--lvl-evento` (neutro), `--lvl-prova` (`#a78bfa`) e
+  `--lvl-bateria` (`#22d3ee`), configuráveis no tema do evento
+  (`lvl_prova`, `lvl_bateria`) e incluídos na guarda de contraste.
+- Os níveis nunca são diferenciados apenas por cor: usam chip com texto
+  “PROVA”/“BATERIA”, ícone e borda lateral (grossa para prova, fina para
+  bateria).
+- `resultados.html` separa “Resultado da PROVA” (violeta, consolidado) de
+  “Resultados por BATERIA” (ciano).
+- O telão usa “RESULTADO DA BATERIA” em ciano e “RESULTADO FINAL DA PROVA” em
+  violeta, com selo da prova no topo.
+- Súmula e CSV exportam o nível em coluna própria. O CSV contém linhas
+  `nivel=BATERIA` e, quando consolidado, linhas `nivel=PROVA`.
+
+### Rótulos compartilhados (v2.6)
+
+`frontend/static/common/labels.js` centraliza:
+- prova: `PROVA 3 · 25 m Crawl · Masculino · Mirim` (categoria `livre` omitida;
+  maratonas: `Maratona 2 h · Misto · Mirim`);
+- bateria: `BATERIA 2 de 5`; fora do contexto da prova:
+  `BATERIA 2 de 5 · Prova 3`;
+- nome de bateria redundante (`Bateria 2`) não é repetido;
+- categorias: `Cat. Livre`, `Pré Mirim`, `Júnior`, etc.
 
 ### Admin
 ```
@@ -374,8 +465,8 @@ prontidão e controle da prova usam REST.
   "type": "prova_state",
   "scope": "prova",
   "prova_id": "uuid",
-  "payload": { "id": "uuid", "name": "100m livres", "status": "in_progress",
-               "consolidate_results": true, "heats": [ /* ... */ ] }
+  "payload": { "id": "uuid", "name": "25 m Livre · Misto", "status": "in_progress",
+               "mixed_ranking": "both", "heats": [ /* ... */ ] }
 }
 
 // Status do servidor (conexão e mudanças de contagem)
@@ -447,17 +538,25 @@ bateria ativa. Clientes também reconciliam via REST após reconexão.
 
 ### Classificação consolidada
 
-- Padrão por prova: `consolidate_results=true`, `classification_criterion=lowest_time`.
-- Reúne resultados válidos (`status=finished` e `race_time_ms` não nulo) de
-  todas as baterias e ordena pelo inteiro `race_time_ms` (nunca pela string).
+- Padrão: `classification_criterion=lowest_time`; todo grupo consolida suas
+  baterias (a opção “Classificar isolada” cria um grupo de uma bateria).
+- Reúne resultados válidos (`status=finished` e `race_time_ms` não nulo) somente
+  de baterias do mesmo grupo, usando `prova.distance_m` para velocidade e
+  classificação.
+- Bateria legada com distância divergente da prova é ignorada do consolidado e
+  sinalizada em `warnings` (`bateria_distancia_divergente`), mas continua
+  visível em `battery_results`.
+- Ordena pelo inteiro `race_time_ms` (nunca pela string).
 - Empate: mesma posição esportiva, próxima salta (1,2,2,4); a ordem visual
   desempata por raia, nome e id, sem atribuir posição diferente.
 - DQ, sem tempo e baterias em andamento ficam fora do ranking de válidos,
   em `excluded`, preservando o status.
 - `is_provisional=true` enquanto qualquer bateria da prova não estiver
   `finished`; somente então a classificação é definitiva.
-- Com `consolidate_results=false`, a resposta traz `battery_results` por
-  bateria e `standings` vazio.
+- `mixed_ranking` é derivado: `both` para prova `MISTO` (geral + por naipe) e
+  `overall` para os demais. A interface sempre informa “Classificação
+  consolidada de N baterias (menor tempo)” e mantém `battery_results` com o
+  resultado de cada bateria.
 
 ### Mensagens Cliente → Servidor
 
@@ -526,8 +625,9 @@ swimtimer/
 
 ## 6.1. Concorrência e limites
 
-- Locks `asyncio` por bateria/prova no processo + índices únicos no SQLite
-  (`uq_heat_prova_order`, `uq_lap_event_lane_number`) como rede de segurança.
+- Locks `asyncio` por bateria e por evento no processo + índices únicos no
+  SQLite (`uq_heat_event_order`, `uq_lap_event_lane_number`) como rede de
+  segurança.
 - Finalização dupla retorna `409 ja_finalizou`; persistência ocorre antes do
   broadcast. WS reflete somente o que foi gravado.
 - Importação de atletas grava o subconjunto válido em uma única transação. O

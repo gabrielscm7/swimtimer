@@ -7,11 +7,12 @@ import zipfile
 from datetime import datetime
 from pathlib import Path
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models import Event, Heat, Prova
 from . import journal
+from . import provas as prova_rules
 from .backup import _copy_database, db_file_path
 from .payloads import _classification_payload, _prova_heats
 from .snapshots import latest_by_heat, snapshot_summary
@@ -25,6 +26,7 @@ def csv_safe(value: object) -> str:
 
 
 CSV_HEADER = [
+    "nivel",
     "prova",
     "bateria",
     "raia",
@@ -91,6 +93,7 @@ async def build_results_csv(session: AsyncSession, event: Event) -> str:
     for row in rows:
         writer.writerow(
             [
+                csv_safe("BATERIA"),
                 csv_safe(row["prova"]),
                 csv_safe(row["bateria"]),
                 csv_safe(row["raia"]),
@@ -102,6 +105,29 @@ async def build_results_csv(session: AsyncSession, event: Event) -> str:
                 csv_safe(row["oficial"]),
             ]
         )
+
+    # Resultado consolidado da PROVA em linhas proprias, sempre depois das
+    # linhas de bateria para preservar a leitura detalhada existente.
+    result = await session.execute(
+        select(Prova).where(Prova.event_id == event.id).order_by(Prova.order_num)
+    )
+    for prova in result.scalars().all():
+        classification = await _classification_payload(session, prova)
+        for entry in classification.get("standings", []):
+            writer.writerow(
+                [
+                    csv_safe("PROVA"),
+                    csv_safe(prova.name),
+                    "",
+                    csv_safe(entry["lane_number"]),
+                    csv_safe(entry.get("participant_name") or ""),
+                    csv_safe(entry.get("team_name") or ""),
+                    csv_safe(entry.get("race_time_display") or ""),
+                    csv_safe(entry.get("status") or ""),
+                    "",
+                    "",
+                ]
+            )
     return "\ufeff" + buffer.getvalue()
 
 
@@ -143,6 +169,26 @@ async def render_sumula_html(
         ),
         [],
     )
+    if heat.prova_id:
+        heat.heats_in_prova = int(
+            await session.scalar(
+                select(func.count())
+                .select_from(Heat)
+                .where(Heat.prova_id == heat.prova_id)
+            )
+            or 1
+        )
+        heat.heat_index_in_prova = int(
+            await session.scalar(
+                select(func.count())
+                .select_from(Heat)
+                .where(
+                    Heat.prova_id == heat.prova_id,
+                    Heat.order_num <= heat.order_num,
+                )
+            )
+            or heat.order_num
+        )
     summary = snapshot_summary(snapshot)
     revision = summary["revision"] if summary else "-"
     status = summary["status"] if summary else "sem-revisao"
@@ -152,6 +198,7 @@ async def render_sumula_html(
 
     rows = "".join(
         "<tr>"
+        f"<td><span class=\"level-chip bateria\">BATERIA</span></td>"
         f"<td>{entry['lane_number']}</td>"
         f"<td>{html.escape(entry.get('participant_name') or '-')}</td>"
         f"<td>{html.escape(entry.get('team_name') or '-')}</td>"
@@ -161,8 +208,12 @@ async def render_sumula_html(
         for entry in entries
     )
     event_name = html.escape(event.name) if event else ""
-    prova_name = html.escape(prova.name) if prova else ""
-    heat_name = html.escape(heat.name)
+    prova_name = html.escape(
+        prova_rules.prova_label(prova) if prova else ""
+    )
+    heat_name = html.escape(
+        prova_rules.bateria_label(heat, prova, include_prova=False)
+    )
     printed_at = datetime.now().strftime("%d/%m/%Y %H:%M")
     return f"""<!doctype html>
 <html lang="pt-BR">
@@ -178,6 +229,10 @@ async def render_sumula_html(
   th, td {{ border: 1px solid #444; padding: 6px; text-align: left; }}
   th {{ background: #eee; }}
   .badge {{ font-weight: bold; }}
+  .level-chip {{ display: inline-block; padding: 1px 6px; border-radius: 999px;
+    font-size: 10px; font-weight: 700; letter-spacing: .5px; }}
+  .level-chip.bateria {{ color: #0e7490; border: 1px solid #0e7490;
+    border-left: 2px solid #0e7490; }}
   .signatures {{ display: flex; gap: 40px; margin-top: 48px; font-size: 12px; }}
   .signatures div {{ border-top: 1px solid #444; padding-top: 4px; width: 220px; }}
   @media print {{
@@ -196,7 +251,7 @@ async def render_sumula_html(
   <span>Impresso em: {printed_at}</span>
 </div>
 <table>
-<thead><tr><th>Raia</th><th>Atleta</th><th>Equipe</th><th>Tempo</th><th>Status</th></tr></thead>
+<thead><tr><th>Nivel</th><th>Raia</th><th>Atleta</th><th>Equipe</th><th>Tempo</th><th>Status</th></tr></thead>
 <tbody>{rows}</tbody>
 </table>
 <div class="signatures">

@@ -1,4 +1,5 @@
 import re
+from datetime import date as _date
 from typing import Literal, Optional
 
 from pydantic import (
@@ -9,45 +10,75 @@ from pydantic import (
     model_validator,
 )
 
+from .domain import (
+    CATEGORIES,
+    STROKES,
+    normalize_category,
+    normalize_naipe,
+    normalize_stroke,
+)
+
 EventStatus = Literal["draft", "active", "finished"]
 HeatType = Literal["maratona", "bateria"]
+ProvaFormat = Literal["bateria", "maratona"]
+Stroke = Literal[
+    "crawl", "borboleta", "peito", "costas", "livre", "medley"
+]
+Category = Literal[
+    "pre_mirim",
+    "mirim",
+    "petiz",
+    "infantil",
+    "juvenil",
+    "junior",
+    "adulto",
+    "livre",
+]
 HeatStatus = Literal["scheduled", "ready_check", "active", "finished"]
 LaneStatus = Literal["assigned", "ready", "active", "finished", "dq"]
 ClassificationCriterion = Literal["lowest_time"]
 MixedRanking = Literal["overall", "by_naipe", "both"]
 # Exibicao publica dos nomes: completo ou "Maria S.".
 PublicNameMode = Literal["full", "initials"]
-# Atletas continuam apenas M/F; provas aceitam MISTO.
+# Atletas continuam apenas M/F; baterias aceitam MISTO.
 AthleteNaipe = Literal["M", "F"]
 Naipe = Literal["M", "F", "MISTO"]
 
-_NAIPE_ALIASES = {
-    "M": "M",
-    "MASC": "M",
-    "MAS": "M",
-    "MASCULINO": "M",
-    "F": "F",
-    "FEM": "F",
-    "FEMININO": "F",
-    "FEMININA": "F",
-    "MISTO": "MISTO",
-    "MISTA": "MISTO",
-    "MIXTO": "MISTO",
-    "MIXED": "MISTO",
-}
+assert tuple(STROKES) == (
+    "crawl",
+    "borboleta",
+    "peito",
+    "costas",
+    "livre",
+    "medley",
+)
+assert tuple(CATEGORIES) == (
+    "pre_mirim",
+    "mirim",
+    "petiz",
+    "infantil",
+    "juvenil",
+    "junior",
+    "adulto",
+    "livre",
+)
 
 
-def normalize_naipe(value: object) -> object:
-    if isinstance(value, str):
-        return _NAIPE_ALIASES.get(value.strip().upper(), value.strip().upper())
-    return value
+def normalize_category_input(value: object) -> object:
+    return normalize_category(value)
 
 
-def normalize_category(value: object) -> object:
-    if isinstance(value, str):
-        cleaned = value.strip().upper()
-        return cleaned or None
-    return value
+def validate_iso_date(value: str | None) -> str | None:
+    if value is None:
+        return None
+    cleaned = value.strip()
+    try:
+        _date.fromisoformat(cleaned)
+    except ValueError as exc:
+        raise ValueError("data_invalida") from exc
+    if len(cleaned) != 10:
+        raise ValueError("data_invalida")
+    return cleaned
 
 
 
@@ -91,13 +122,19 @@ def compute_speed(distance_m: int | None, race_time_ms: int | None) -> float | N
 class EventCreate(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     location: Optional[str] = Field(default=None, max_length=200)
-    date: Optional[str] = Field(default=None, max_length=40)
+    date: str = Field(min_length=10, max_length=10)
     pool_length_m: int = 25
+    default_lane_count: int = Field(default=3, ge=1, le=8)
 
     @field_validator("name", mode="before")
     @classmethod
     def _trim_name(cls, value: object) -> object:
         return _trim_required_name(value)
+
+    @field_validator("date")
+    @classmethod
+    def _validate_date(cls, value: str) -> str:
+        return validate_iso_date(value)
 
     @field_validator("pool_length_m")
     @classmethod
@@ -110,8 +147,9 @@ class EventCreate(BaseModel):
 class EventUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=200)
     location: Optional[str] = Field(default=None, max_length=200)
-    date: Optional[str] = Field(default=None, max_length=40)
+    date: Optional[str] = Field(default=None, min_length=10, max_length=10)
     pool_length_m: Optional[int] = None
+    default_lane_count: Optional[int] = Field(default=None, ge=1, le=8)
     status: Optional[EventStatus] = None
     public_results_enabled: Optional[bool] = None
     public_name_mode: Optional[PublicNameMode] = None
@@ -120,6 +158,11 @@ class EventUpdate(BaseModel):
     @classmethod
     def _trim_name(cls, value: object) -> object:
         return _trim_required_name(value)
+
+    @field_validator("date")
+    @classmethod
+    def _validate_date(cls, value: str | None) -> str | None:
+        return validate_iso_date(value)
 
     @field_validator("pool_length_m")
     @classmethod
@@ -134,7 +177,9 @@ class EventUpdate(BaseModel):
             self,
             (
                 "name",
+                "date",
                 "pool_length_m",
+                "default_lane_count",
                 "status",
                 "public_results_enabled",
                 "public_name_mode",
@@ -154,6 +199,8 @@ class EventTheme(BaseModel):
     muted: str = "#6b7280"
     accent: str = "#00d4ff"
     accent_strong: str = "#00b0d6"
+    lvl_prova: str = "#a78bfa"
+    lvl_bateria: str = "#22d3ee"
     bg_image_url: Optional[str] = None
     bg_opacity: float = Field(default=1.0, ge=0, le=1)
     bg_fit: Literal["cover", "contain", "center"] = "cover"
@@ -172,6 +219,8 @@ class EventTheme(BaseModel):
         "muted",
         "accent",
         "accent_strong",
+        "lvl_prova",
+        "lvl_bateria",
     )
     @classmethod
     def _validate_color(cls, value: str) -> str:
@@ -234,81 +283,8 @@ class EventDetailResponse(EventResponse):
 
 
 # --------------------------------------------------------------------------- #
-# Prova
+# Prova (grupo derivado, somente leitura)
 # --------------------------------------------------------------------------- #
-class ProvaCreate(BaseModel):
-    name: str = Field(min_length=1, max_length=200)
-    order_num: Optional[int] = Field(default=None, ge=1)
-    stroke: Optional[str] = Field(default=None, max_length=60)
-    distance_m: Optional[int] = Field(default=None, gt=0)
-    category: Optional[str] = Field(default=None, max_length=60)
-    naipe: Optional[Naipe] = None
-    mixed_ranking: MixedRanking = "both"
-    consolidate_results: bool = True
-    classification_criterion: ClassificationCriterion = "lowest_time"
-
-    @field_validator("name", mode="before")
-    @classmethod
-    def _trim_name(cls, value: object) -> object:
-        return _trim_required_name(value)
-
-    @field_validator("naipe", mode="before")
-    @classmethod
-    def _normalize_naipe(cls, value: object) -> object:
-        return normalize_naipe(value)
-
-    @field_validator("category", mode="before")
-    @classmethod
-    def _normalize_category(cls, value: object) -> object:
-        return normalize_category(value)
-
-
-class ProvaUpdate(BaseModel):
-    name: Optional[str] = Field(default=None, min_length=1, max_length=200)
-    order_num: Optional[int] = Field(default=None, ge=1)
-    stroke: Optional[str] = Field(default=None, max_length=60)
-    distance_m: Optional[int] = Field(default=None, gt=0)
-    category: Optional[str] = Field(default=None, max_length=60)
-    naipe: Optional[Naipe] = None
-    mixed_ranking: Optional[MixedRanking] = None
-    consolidate_results: Optional[bool] = None
-    classification_criterion: Optional[ClassificationCriterion] = None
-
-    @field_validator("name", mode="before")
-    @classmethod
-    def _trim_name(cls, value: object) -> object:
-        return _trim_required_name(value)
-
-    @field_validator("naipe", mode="before")
-    @classmethod
-    def _normalize_naipe(cls, value: object) -> object:
-        return normalize_naipe(value)
-
-    @field_validator("category", mode="before")
-    @classmethod
-    def _normalize_category(cls, value: object) -> object:
-        return normalize_category(value)
-
-    @model_validator(mode="after")
-    def _required_fields(self) -> "ProvaUpdate":
-        return _reject_null(
-            self,
-            (
-                "name",
-                "order_num",
-                "mixed_ranking",
-                "consolidate_results",
-                "classification_criterion",
-            ),
-        )
-
-
-class OrderIdsRequest(BaseModel):
-    """Lista completa de IDs na nova ordem (1..N)."""
-
-    ids: list[str] = Field(default_factory=list, max_length=1000)
-
-
 class ProvaResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -316,16 +292,36 @@ class ProvaResponse(BaseModel):
     event_id: str
     name: str
     order_num: int
+    format: str = "bateria"
     stroke: str | None = None
     distance_m: int | None = None
     category: str | None = None
     naipe: str | None = None
+    classify_alone: bool = False
+    legacy_incomplete: bool = False
     mixed_ranking: str = "both"
-    consolidate_results: bool = True
     classification_criterion: str = "lowest_time"
     status: str
     created_at: float
     heats: list["HeatResponse"] = Field(default_factory=list)
+
+
+class HeatOrderRequest(BaseModel):
+    """Ordem livre: lista completa de ids ou movimentacao para a posicao N."""
+
+    ids: Optional[list[str]] = Field(default=None, max_length=1000)
+    heat_id: Optional[str] = None
+    position: Optional[int] = Field(default=None, ge=1)
+
+    @model_validator(mode="after")
+    def _shape(self) -> "HeatOrderRequest":
+        full_list = self.ids is not None
+        move = self.heat_id is not None or self.position is not None
+        if full_list and move:
+            raise ValueError("ordem_formato_invalido")
+        if not full_list and not (self.heat_id and self.position is not None):
+            raise ValueError("ordem_formato_invalido")
+        return self
 
 
 class ClassificationEntry(BaseModel):
@@ -351,7 +347,6 @@ class ClassificationResponse(BaseModel):
     prova_id: str
     name: str
     status: str
-    consolidate_results: bool
     classification_criterion: str
     mixed_ranking: str = "both"
     is_provisional: bool
@@ -359,6 +354,7 @@ class ClassificationResponse(BaseModel):
     standings_by_naipe: dict[str, list[ClassificationEntry]] | None = None
     excluded: list[ClassificationEntry] = Field(default_factory=list)
     battery_results: list[dict] = Field(default_factory=list)
+    warnings: list[dict] = Field(default_factory=list)
 
 
 # --------------------------------------------------------------------------- #
@@ -367,7 +363,7 @@ class ClassificationResponse(BaseModel):
 class AthleteCreate(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     naipe: AthleteNaipe
-    category: Optional[str] = Field(default=None, max_length=60)
+    category: Optional[Category] = None
     team_id: Optional[str] = None
     registration_code: Optional[str] = Field(default=None, max_length=40)
 
@@ -400,7 +396,7 @@ class AthleteCreate(BaseModel):
 class AthleteUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=120)
     naipe: Optional[AthleteNaipe] = None
-    category: Optional[str] = Field(default=None, max_length=60)
+    category: Optional[Category] = None
     team_id: Optional[str] = None
     registration_code: Optional[str] = Field(default=None, max_length=40)
     force: bool = False
@@ -504,47 +500,114 @@ class TeamResponse(BaseModel):
 # --------------------------------------------------------------------------- #
 # Heat
 # --------------------------------------------------------------------------- #
+_VALID_DISTANCES = (25, 50, 100, 200, 400, 800, 1500)
+
+
 class HeatCreate(BaseModel):
-    name: str = Field(min_length=1, max_length=200)
+    name: Optional[str] = Field(default=None, max_length=200)
     order_num: Optional[int] = Field(default=None, ge=1)
-    heat_type: HeatType = "maratona"
+    heat_type: HeatType = "bateria"
+    stroke: Stroke
+    naipe: Naipe
+    category: Category
     distance_m: Optional[int] = Field(default=None, gt=0)
     duration_s: Optional[int] = Field(default=None, gt=0)
+    lane_count: Optional[int] = Field(default=None, ge=1, le=8)
+    classify_alone: bool = False
 
     @field_validator("name", mode="before")
     @classmethod
     def _trim_name(cls, value: object) -> object:
         return _trim_required_name(value)
 
+    @field_validator("stroke", mode="before")
+    @classmethod
+    def _normalize_stroke_value(cls, value: object) -> object:
+        return normalize_stroke(value)
+
+    @field_validator("naipe", mode="before")
+    @classmethod
+    def _normalize_naipe_value(cls, value: object) -> object:
+        return normalize_naipe(value)
+
+    @field_validator("category", mode="before")
+    @classmethod
+    def _normalize_category_value(cls, value: object) -> object:
+        return normalize_category(value)
+
     @field_validator("distance_m")
     @classmethod
     def _validate_distance(cls, value: int | None) -> int | None:
-        if value is not None and value not in (25, 50, 100, 200, 400, 800, 1500):
+        if value is not None and value not in _VALID_DISTANCES:
             raise ValueError("distance_m invalido")
         return value
 
+    @model_validator(mode="after")
+    def _definition(self) -> "HeatCreate":
+        if self.heat_type == "bateria" and self.distance_m is None:
+            raise ValueError("distance_m_obrigatorio")
+        if self.heat_type == "maratona" and self.duration_s is None:
+            raise ValueError("duration_s_obrigatorio")
+        return self
+
 
 class HeatUpdate(BaseModel):
-    name: Optional[str] = Field(default=None, min_length=1, max_length=200)
-    order_num: Optional[int] = Field(default=None, ge=1)
+    name: Optional[str] = Field(default=None, max_length=200)
+    heat_type: Optional[HeatType] = None
+    stroke: Optional[Stroke] = None
+    naipe: Optional[Naipe] = None
+    category: Optional[Category] = None
     distance_m: Optional[int] = Field(default=None, gt=0)
     duration_s: Optional[int] = Field(default=None, gt=0)
+    lane_count: Optional[int] = Field(default=None, ge=1, le=8)
+    classify_alone: Optional[bool] = None
+    force: bool = False
+    override_reason: Optional[str] = Field(default=None, max_length=500)
 
     @field_validator("name", mode="before")
     @classmethod
     def _trim_name(cls, value: object) -> object:
-        return _trim_required_name(value)
+        if isinstance(value, str):
+            cleaned = value.strip()
+            return cleaned or ""
+        return value
+
+    @field_validator("stroke", mode="before")
+    @classmethod
+    def _normalize_stroke_value(cls, value: object) -> object:
+        return normalize_stroke(value)
+
+    @field_validator("naipe", mode="before")
+    @classmethod
+    def _normalize_naipe_value(cls, value: object) -> object:
+        return normalize_naipe(value)
+
+    @field_validator("category", mode="before")
+    @classmethod
+    def _normalize_category_value(cls, value: object) -> object:
+        return normalize_category(value)
 
     @field_validator("distance_m")
     @classmethod
     def _validate_distance(cls, value: int | None) -> int | None:
-        if value is not None and value not in (25, 50, 100, 200, 400, 800, 1500):
+        if value is not None and value not in _VALID_DISTANCES:
             raise ValueError("distance_m invalido")
         return value
 
     @model_validator(mode="after")
     def _required_fields(self) -> "HeatUpdate":
-        return _reject_null(self, ("name", "order_num"))
+        return _reject_null(
+            self,
+            (
+                "name",
+                "heat_type",
+                "stroke",
+                "naipe",
+                "category",
+                "lane_count",
+                "classify_alone",
+            ),
+        )
 
 
 class HeatResponse(BaseModel):
@@ -561,6 +624,12 @@ class HeatResponse(BaseModel):
     heat_index_in_prova: int | None = None
     heats_in_prova: int | None = None
     heat_type: str
+    stroke: str | None = None
+    naipe: str | None = None
+    category: str | None = None
+    classify_alone: bool = False
+    lane_count: int = 3
+    legacy_incomplete: bool = False
     distance_m: int | None = None
     duration_s: int | None = None
     status: str

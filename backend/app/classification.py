@@ -39,11 +39,11 @@ def _entry(
     lane: dict,
     heat: dict,
     team_map: dict[str, dict],
-    pool_distance_m: int | None,
+    distance_m: int | None,
 ) -> dict:
     team = team_map.get(lane.get("team_id") or "")
     time_ms = lane.get("race_time_ms")
-    distance = heat.get("distance_m") or pool_distance_m
+    distance = distance_m
     classification_status = classify_lane(lane.get("status", ""), time_ms)
     return {
         "position": None,
@@ -125,10 +125,11 @@ def _ranked_copy(entries: list[dict]) -> list[dict]:
 
 def build_classification(
     *,
-    consolidate_results: bool,
     heats: list[dict],
     team_map: dict[str, dict],
     pool_distance_m: int | None,
+    prova_distance_m: int | None = None,
+    prova_id: str | None = None,
     mixed_ranking: str = "both",
 ) -> dict:
     """Monta a resposta de classificacao a partir de heats ja carregados.
@@ -140,19 +141,46 @@ def build_classification(
     statuses = [heat.get("status", "scheduled") for heat in heats]
     battery_results: list[dict] = []
     all_entries: list[dict] = []
+    warnings: list[dict] = []
+    effective_distance = prova_distance_m
 
     for heat in heats:
+        divergence = None
+        if prova_id and heat.get("prova_id") not in (None, prova_id):
+            divergence = "bateria_de_outra_prova"
+        elif (
+            prova_distance_m is not None
+            and heat.get("distance_m") is not None
+            and heat.get("distance_m") != prova_distance_m
+        ):
+            divergence = "bateria_distancia_divergente"
+        if divergence:
+            warnings.append(
+                {
+                    "code": divergence,
+                    "heat_id": heat["id"],
+                    "heat_name": heat.get("name", ""),
+                    "distance_m": heat.get("distance_m"),
+                    "prova_distance_m": prova_distance_m,
+                }
+            )
+        entry_distance = (
+            prova_distance_m
+            if effective_distance is not None
+            else heat.get("distance_m")
+        )
         entries = [
             _entry(
                 lane=lane,
                 heat=heat,
                 team_map=team_map,
-                pool_distance_m=pool_distance_m,
+                distance_m=entry_distance,
             )
             for lane in heat.get("lanes", [])
             if lane.get("participant_name") or lane.get("team_id")
         ]
-        all_entries.extend(entries)
+        if divergence is None:
+            all_entries.extend(entries)
         battery_results.append(
             {
                 "heat_id": heat["id"],
@@ -172,10 +200,8 @@ def build_classification(
         "standings_by_naipe": None,
         "excluded": [],
         "battery_results": battery_results,
+        "warnings": warnings,
     }
-
-    if not consolidate_results:
-        return result
 
     valid = [
         entry

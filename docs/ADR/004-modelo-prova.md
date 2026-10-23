@@ -1,7 +1,12 @@
 # ADR 004 — Nova entidade Prova entre Evento e Bateria
 
 **Data:** 2026-10-21
-**Status:** Aceito
+**Status:** Parcialmente revogado por ADR-012
+
+> **Revogado por ADR-012 (2026-10-23):** a prova deixa de ser cadastrada
+> explicitamente e passa a ser um grupo automático de baterias. O endpoint
+> legado de criação de prova 1:1 e o CRUD de prova foram removidos. A entidade
+> `Prova` permanece apenas como agrupamento derivado.
 
 ## Contexto
 O modelo anterior usava `Heat` para representar tanto a prova quanto a

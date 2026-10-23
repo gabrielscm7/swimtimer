@@ -39,10 +39,28 @@ test("gestaoErrorMessage e sempre acessado via GestaoLogic", () => {
   }
 });
 
-test("salvar raia individual nao converte UUID para Number", () => {
+test("alocacao de atleta nao converte UUIDs para Number", () => {
   const source = read(path.join(GESTAO_DIR, "main.js"));
-  assert.match(source, /saveLane\(target\.dataset\.heat/);
-  assert.doesNotMatch(source, /saveLane\(Number\(target\.dataset\.heat\)/);
+  assert.match(
+    source,
+    /allocateAthlete\(target\.dataset\.heat, target\.dataset\.athlete/
+  );
+  assert.doesNotMatch(source, /Number\(target\.dataset\.heat\)/);
+  const baterias = read(path.join(GESTAO_DIR, "baterias.js"));
+  assert.match(baterias, /\/api\/heats\/\$\{heatId\}\/lanes/);
+});
+
+test("gestao nao usa mais endpoints de CRUD/reordenacao de prova", () => {
+  for (const name of fs.readdirSync(GESTAO_DIR)) {
+    if (!name.endsWith(".js")) continue;
+    const source = read(path.join(GESTAO_DIR, name));
+    assert.doesNotMatch(source, /\/api\/events\/\$\{[^}]+\}\/provas/);
+    assert.doesNotMatch(source, /\/api\/provas\/\$\{[^}]+\}/);
+  }
+  assert.ok(
+    !fs.existsSync(path.join(GESTAO_DIR, "provas.js")),
+    "gestao/provas.js deve ser removido"
+  );
 });
 
 test("publico nao referencia perBattery indefinido", () => {
@@ -63,6 +81,28 @@ function referencedIds(jsPath) {
     (match) => match[1]
   );
 }
+
+test("paginas carregam labels.js antes dos modulos", () => {
+  const pages = [
+    "fiscal.html",
+    "supervisor.html",
+    "gestao.html",
+    "resultados.html",
+    "sumula.html",
+    "publico.html",
+    "index.html",
+  ];
+  for (const page of pages) {
+    const source = read(path.join(__dirname, "..", page));
+    const labelsAt = source.indexOf("/static/common/labels.js");
+    const moduleAt = source.indexOf('type="module"');
+    assert.ok(labelsAt >= 0, `${page} nao carrega labels.js`);
+    assert.ok(
+      moduleAt < 0 || labelsAt < moduleAt,
+      `${page} deve carregar labels.js antes do modulo`
+    );
+  }
+});
 
 test("paginas referenciam apenas IDs existentes", () => {
   const pages = [

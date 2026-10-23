@@ -16,7 +16,7 @@ def _alembic_config() -> Config:
 def test_mixed_ranking_added_with_default_both(tmp_path, monkeypatch):
     db = tmp_path / "mixed_ranking.db"
     monkeypatch.setattr(settings, "DATABASE_URL", f"sqlite+aiosqlite:///{db}")
-    command.upgrade(_alembic_config(), "head")
+    command.upgrade(_alembic_config(), "0014_prova_format_definition")
 
     con = sqlite3.connect(db)
     columns = [row[1] for row in con.execute("PRAGMA table_info(prova)")]
@@ -42,7 +42,7 @@ def test_mixed_ranking_downgrade_removes_column(tmp_path, monkeypatch):
     db = tmp_path / "mixed_ranking_down.db"
     monkeypatch.setattr(settings, "DATABASE_URL", f"sqlite+aiosqlite:///{db}")
     config = _alembic_config()
-    command.upgrade(config, "head")
+    command.upgrade(config, "0014_prova_format_definition")
     command.downgrade(config, "0007_time_ack_idempotencia")
 
     con = sqlite3.connect(db)
@@ -54,7 +54,7 @@ def test_mixed_ranking_downgrade_removes_column(tmp_path, monkeypatch):
 def test_registration_code_and_new_unique_index(tmp_path, monkeypatch):
     db = tmp_path / "registration.db"
     monkeypatch.setattr(settings, "DATABASE_URL", f"sqlite+aiosqlite:///{db}")
-    command.upgrade(_alembic_config(), "head")
+    command.upgrade(_alembic_config(), "0014_prova_format_definition")
 
     con = sqlite3.connect(db)
     con.execute("PRAGMA foreign_keys=ON")
@@ -96,7 +96,7 @@ def test_registration_code_downgrade_restores_old_index(tmp_path, monkeypatch):
     db = tmp_path / "registration_down.db"
     monkeypatch.setattr(settings, "DATABASE_URL", f"sqlite+aiosqlite:///{db}")
     config = _alembic_config()
-    command.upgrade(config, "head")
+    command.upgrade(config, "0014_prova_format_definition")
     command.downgrade(config, "0008_prova_mixed_ranking")
 
     con = sqlite3.connect(db)

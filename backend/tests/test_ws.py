@@ -1,6 +1,6 @@
 def _create_event(ws_client, name="Evento WS"):
     response = ws_client.post(
-        "/api/events", json={"name": name, "pool_length_m": 25}
+        "/api/events", json={"name": name, "date": "2026-10-23", "pool_length_m": 25}
     )
     assert response.status_code == 201, response.text
     return response.json()
@@ -8,14 +8,14 @@ def _create_event(ws_client, name="Evento WS"):
 
 def _create_heat(ws_client, event_id):
     response = ws_client.post(
-        f"/api/events/{event_id}/provas",
-        json={"name": "Bateria 1", "distance_m": 25},
-    )
-    assert response.status_code == 201, response.text
-    prova = response.json()
-    response = ws_client.post(
-        f"/api/provas/{prova['id']}/heats",
-        json={"name": "Bateria 1", "heat_type": "bateria", "distance_m": 25},
+        f"/api/events/{event_id}/heats",
+        json={
+            "heat_type": "bateria",
+            "stroke": "livre",
+            "distance_m": 25,
+            "naipe": "MISTO",
+            "category": "livre",
+        },
     )
     assert response.status_code == 201, response.text
     return response.json()
@@ -138,19 +138,22 @@ def test_ws_internal_error_keeps_connection(ws_client, monkeypatch):
 
 def test_ws_sends_prova_state_on_connect(ws_client):
     event = _create_event(ws_client, name="Evento WS prova")
-    prova = ws_client.post(
-        f"/api/events/{event['id']}/provas",
-        json={"name": "100 Livres", "distance_m": 100},
-    ).json()
     heat = ws_client.post(
-        f"/api/provas/{prova['id']}/heats",
-        json={"name": "Bateria 1", "heat_type": "bateria", "distance_m": 100},
+        f"/api/events/{event['id']}/heats",
+        json={
+            "heat_type": "bateria",
+            "stroke": "livre",
+            "distance_m": 100,
+            "naipe": "MISTO",
+            "category": "livre",
+        },
     ).json()
+    prova = ws_client.get(f"/api/provas/{heat['prova_id']}").json()
     ws_client.post(
         f"/api/heats/{heat['id']}/lanes",
         json={"lanes": [{"lane_number": 1, "participant_name": "Ana"}]},
     )
-    current = ws_client.get(f"/api/provas/{prova['id']}/heats").json()[0]
+    current = ws_client.get(f"/api/heats/{heat['id']}").json()
     ws_client.post(f"/api/heats/{heat['id']}/open-ready-check")
     ws_client.post(f"/api/lanes/{current['heat_lanes'][0]['id']}/ready")
     ws_client.post(f"/api/heats/{heat['id']}/start")

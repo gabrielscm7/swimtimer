@@ -23,7 +23,7 @@ async def _finished_heat(client):
         event["id"],
         name="Maria da Silva",
         naipe="F",
-        category="SENIOR",
+        category="adulto",
         team_id=team["id"],
     )
     response = await client.post(
@@ -52,25 +52,33 @@ async def test_results_csv(client):
     assert text.startswith("\ufeff")
     lines = text.lstrip("\ufeff").splitlines()
     assert lines[0] == (
-        "prova;bateria;raia;atleta;equipe;tempo;status;revisao;oficial"
+        "nivel;prova;bateria;raia;atleta;equipe;tempo;status;revisao;oficial"
     )
-    assert lines[1].split(";")[:5] == [
-        "100 Livres",
+    battery = next(
+        line for line in lines[1:] if line.split(";")[0] == "BATERIA"
+    )
+    prova = next(line for line in lines[1:] if line.split(";")[0] == "PROVA")
+    assert battery.split(";")[1:6] == [
+        "100 m Livre · Misto",
         "100 Livres",
         "3",
         "Maria da Silva",
         "Equipe Azul",
     ]
-    assert lines[1].split(";")[7] == "1"
-    assert lines[1].split(";")[8] == "nao"
+    assert battery.split(";")[8] == "1"
+    assert battery.split(";")[9] == "nao"
+    assert prova.split(";")[1] == "100 m Livre · Misto"
+    assert prova.split(";")[3] == "3"
+    assert prova.split(";")[4] == "Maria da Silva"
 
     await client.post(f"/api/heats/{heat['id']}/homologate")
     again = await client.get(
         f"/api/events/{event['id']}/export/results.csv"
     )
-    row = again.content.decode("utf-8").lstrip("\ufeff").splitlines()[1]
-    assert row.split(";")[7] == "2"
-    assert row.split(";")[8] == "sim"
+    rows = again.content.decode("utf-8").lstrip("\ufeff").splitlines()
+    row = next(line for line in rows[1:] if line.split(";")[0] == "BATERIA")
+    assert row.split(";")[8] == "2"
+    assert row.split(";")[9] == "sim"
 
 
 @pytest.mark.asyncio
@@ -102,4 +110,6 @@ async def test_bundle_contains_db_csv_sumulas_and_manifest(client):
         ).decode("utf-8")
         assert "Maria da Silva" in sumula
         assert "revisao 1" in sumula
+        assert "Nivel" in sumula
+        assert "BATERIA" in sumula
         assert "@media print" in sumula

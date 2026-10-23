@@ -1,7 +1,14 @@
 # ADR 007 — Reordenação transacional e naipe na prova
 
 **Data:** 2026-10-21
-**Status:** Aceito
+**Status:** Parcialmente revogado por ADR-012
+
+> **Revogado por ADR-012 (2026-10-23):** `uq_heat_prova_order` e os endpoints
+> de reordenação por prova (`PUT /api/events/{id}/provas/order` e
+> `PUT /api/provas/{id}/heats/order`) foram substituídos por ordem única por
+> evento (`uq_heat_event_order`) e `PATCH /api/events/{id}/heats/order`.
+> Naipe e categoria deixam de ficar na prova e passam a ser atributos da
+> bateria; a validação de naipe na alocação continua (ADR-009).
 
 ## Contexto
 

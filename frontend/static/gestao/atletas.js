@@ -76,8 +76,10 @@ function athleteFormHTML() {
         </div>
         <div>
           <label>Categoria</label>
-          <input id="af-category" type="text" maxlength="60" placeholder="Ex: SUB-12"
-            value="${escapeHtml(athlete ? athlete.category || "" : "")}" />
+          <select id="af-category">
+            <option value="">— Sem categoria —</option>
+            ${Labels.CATEGORIES.map((value) => `<option value="${value}" ${value === (athlete ? athlete.category : "") ? "selected" : ""}>${escapeHtml(Labels.categoryLabel(value))}</option>`).join("")}
+          </select>
         </div>
         <div>
           <label>Código de registro (homônimos)</label>
@@ -168,7 +170,7 @@ function athleteResultsHTML() {
         <td>${escapeHtml(athlete.name)}</td>
         <td>${escapeHtml(athlete.team_name || "—")}</td>
         <td>${GestaoLogic.naipeLabel(athlete.naipe)}</td>
-        <td>${escapeHtml(athlete.category || "—")}</td>
+        <td>${escapeHtml(athlete.category ? Labels.categoryLabel(athlete.category) : "—")}</td>
         <td>${escapeHtml(athlete.registration_code || "—")}</td>
         <td class="row-actions">
           <button data-action="edit-athlete" data-id="${athlete.id}" title="Editar">✏️</button>
@@ -191,7 +193,7 @@ function athleteResultsHTML() {
 
 
 function athletesFiltersHTML() {
-  const categories = GestaoLogic.distinctCategories(state.allAthletes);
+  const categories = Labels.CATEGORIES;
   return `
     <div class="filters-row">
       <input type="search" data-athlete-filter="q" placeholder="Buscar por nome"
@@ -219,7 +221,7 @@ function athletesFiltersHTML() {
             (category) =>
               `<option value="${escapeHtml(category)}" ${
                 category === state.athletesState.category ? "selected" : ""
-              }>${escapeHtml(category)}</option>`
+              }>${escapeHtml(Labels.categoryLabel(category))}</option>`
           )
           .join("")}
       </select>
@@ -350,8 +352,7 @@ async function saveAthleteForm(button) {
   const payload = {
     name,
     naipe: document.getElementById("af-naipe").value,
-    category:
-      document.getElementById("af-category").value.trim() || null,
+    category: document.getElementById("af-category").value || null,
     team_id: document.getElementById("af-team").value || null,
     registration_code:
       document.getElementById("af-registration").value.trim() || null,

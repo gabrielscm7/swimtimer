@@ -14,6 +14,9 @@
   --red: #ef4444;
   --amber: #f59e0b;
   --blue: #3b82f6;
+  --lvl-evento: #e8eaf0;
+  --lvl-prova: #a78bfa;
+  --lvl-bateria: #22d3ee;
   --radius: 14px;
 }
 
@@ -637,6 +640,72 @@ button.error {
 .section-head h2 {
   margin: 0;
 }
+
+.level-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.7px;
+  text-transform: uppercase;
+  white-space: nowrap;
+  background: rgba(107, 114, 128, 0.12);
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+
+.level-chip .level-icon {
+  font-size: 0.8em;
+  line-height: 1;
+}
+
+.level-chip.prova,
+.level-chip.evento-prova {
+  color: var(--lvl-prova);
+  border-color: color-mix(in srgb, var(--lvl-prova) 55%, transparent);
+  border-left: 6px solid var(--lvl-prova);
+  background: color-mix(in srgb, var(--lvl-prova) 12%, transparent);
+}
+
+.level-chip.bateria {
+  color: var(--lvl-bateria);
+  border-color: color-mix(in srgb, var(--lvl-bateria) 55%, transparent);
+  border-left: 2px solid var(--lvl-bateria);
+  background: color-mix(in srgb, var(--lvl-bateria) 10%, transparent);
+}
+
+.level-chip.evento {
+  color: var(--lvl-evento);
+  border-left: 3px solid var(--lvl-evento);
+}
+
+.level-card {
+  border-left: 1px solid var(--border);
+}
+
+.level-card.prova {
+  border-left: 6px solid var(--lvl-prova);
+}
+
+.level-card.bateria {
+  border-left: 2px solid var(--lvl-bateria);
+}
+
+.level-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 800;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  font-size: 0.78rem;
+}
+
+.level-title.prova { color: var(--lvl-prova); }
+.level-title.bateria { color: var(--lvl-bateria); }
 
 .status-pill {
   display: inline-flex;
@@ -1313,3 +1382,32 @@ button.error {
     position: static;
   }
 }
+
+/* --- Tela de baterias (ADR-012) --- */
+.heat-list { display: flex; flex-direction: column; gap: 10px; }
+.heat-row .accordion-header { align-items: center; gap: 8px; flex-wrap: wrap; }
+.heat-row .accordion-title { display: flex; flex-direction: column; gap: 4px; min-width: 220px; }
+.heat-chips { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+.chip {
+  display: inline-flex; align-items: center;
+  padding: 2px 8px; border-radius: 999px;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.1);
+  font-size: 11px; text-transform: uppercase; letter-spacing: .03em;
+}
+.prova-badge { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text); }
+.order-input { width: 56px; padding: 4px 6px; text-align: center; }
+.heat-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 8px 14px; border-bottom: 1px solid rgba(255,255,255,0.06); }
+.lane-editor { padding: 10px 0; display: flex; flex-direction: column; gap: 10px; }
+.lane-editor .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.lane-occupant { margin: 6px 0; font-weight: 600; }
+.lane-cell button { margin-top: 4px; }
+.athlete-list { display: flex; flex-wrap: wrap; gap: 8px; }
+.athlete-option {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
+  padding: 8px 12px; border-radius: 8px; cursor: pointer; text-align: left;
+  background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.12);
+}
+.athlete-option:hover { border-color: var(--accent); }
+.athlete-option.allocated, .athlete-option:disabled { opacity: .45; cursor: not-allowed; }
+.checkbox-row { display: flex; align-items: center; gap: 8px; }

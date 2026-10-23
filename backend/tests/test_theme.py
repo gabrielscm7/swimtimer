@@ -21,6 +21,8 @@ DEFAULT_THEME = {
     "muted": "#6b7280",
     "accent": "#00d4ff",
     "accent_strong": "#00b0d6",
+    "lvl_prova": "#a78bfa",
+    "lvl_bateria": "#22d3ee",
     "bg_image_url": None,
     "bg_opacity": 1.0,
     "bg_fit": "cover",
@@ -359,7 +361,7 @@ async def test_delete_event_removes_theme_files(client):
 
 def _create_event(ws_client):
     response = ws_client.post(
-        "/api/events", json={"name": "Evento WS tema", "pool_length_m": 25}
+        "/api/events", json={"name": "Evento WS tema", "date": "2026-10-23", "pool_length_m": 25}
     )
     assert response.status_code == 201, response.text
     return response.json()

@@ -28,6 +28,9 @@ class Event(Base):
     location: Mapped[str | None] = mapped_column(String, nullable=True)
     date: Mapped[str | None] = mapped_column(String, nullable=True)
     pool_length_m: Mapped[int] = mapped_column(Integer, nullable=False, default=25)
+    default_lane_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=3, server_default=text("3")
+    )
     status: Mapped[str] = mapped_column(String, default="draft", nullable=False)
     public_results_enabled: Mapped[bool] = mapped_column(
         Boolean, default=True, nullable=False, server_default=text("1")
@@ -60,7 +63,12 @@ class Event(Base):
 
 
 class Prova(Base):
-    """Agrupa varias baterias sob a mesma prova (ex.: 100m livres masculino)."""
+    """Grupo derivado de baterias com a mesma modalidade/naipe/categoria.
+
+    Nao e cadastrada diretamente: e criada/removida automaticamente pelo
+    servico de baterias (ADR-012). `name` e sempre gerado a partir dos
+    atributos do grupo.
+    """
 
     __tablename__ = "prova"
 
@@ -70,16 +78,13 @@ class Prova(Base):
     )
     name: Mapped[str] = mapped_column(String, nullable=False)
     order_num: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    format: Mapped[str] = mapped_column(
+        String, default="bateria", nullable=False, server_default=text("'bateria'")
+    )
     stroke: Mapped[str | None] = mapped_column(String, nullable=True)
     distance_m: Mapped[int | None] = mapped_column(Integer, nullable=True)
     category: Mapped[str | None] = mapped_column(String, nullable=True)
     naipe: Mapped[str | None] = mapped_column(String, nullable=True)
-    mixed_ranking: Mapped[str] = mapped_column(
-        String, default="both", nullable=False, server_default=text("'both'")
-    )
-    consolidate_results: Mapped[bool] = mapped_column(
-        Boolean, default=True, nullable=False
-    )
     classification_criterion: Mapped[str] = mapped_column(
         String, default="lowest_time", nullable=False
     )
@@ -173,10 +178,21 @@ class Heat(Base):
     prova_id: Mapped[str] = mapped_column(
         ForeignKey("prova.id"), nullable=False
     )
-    name: Mapped[str] = mapped_column(String, nullable=False)
+    name: Mapped[str] = mapped_column(
+        String, nullable=False, default="", server_default=text("''")
+    )
     order_num: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     heat_type: Mapped[str] = mapped_column(
         String, default="maratona", nullable=False
+    )
+    stroke: Mapped[str | None] = mapped_column(String, nullable=True)
+    naipe: Mapped[str | None] = mapped_column(String, nullable=True)
+    category: Mapped[str | None] = mapped_column(String, nullable=True)
+    classify_alone: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False, server_default=text("0")
+    )
+    lane_count: Mapped[int] = mapped_column(
+        Integer, default=3, nullable=False, server_default=text("3")
     )
     distance_m: Mapped[int | None] = mapped_column(Integer, nullable=True)
     duration_s: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -195,9 +211,8 @@ class Heat(Base):
     )
 
     __table_args__ = (
-        Index("ix_heat_event_order", "event_id", "order_num"),
         Index("ix_heat_prova_order", "prova_id", "order_num"),
-        UniqueConstraint("prova_id", "order_num", name="uq_heat_prova_order"),
+        UniqueConstraint("event_id", "order_num", name="uq_heat_event_order"),
     )
 
 

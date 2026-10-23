@@ -18,6 +18,9 @@ function message(text) {
 }
 
 function render(heat, event) {
+  const prova = event
+    ? (event.provas || []).find((item) => item.id === heat.prova_id)
+    : null;
   const snapshot = heat.result_snapshot;
   const status = snapshot ? snapshot.status : "provisional";
   const revision = snapshot ? snapshot.revision : "—";
@@ -27,6 +30,7 @@ function render(heat, event) {
   const rows = lanes
     .map(
       (lane) => `<tr>
+        <td><span class="level-chip bateria">BATERIA</span></td>
         <td>${lane.lane_number}</td>
         <td>${escapeHtml(lane.participant_name || "—")}</td>
         <td>${escapeHtml(lane.team || "—")}</td>
@@ -38,8 +42,12 @@ function render(heat, event) {
   const printedAt = new Date().toLocaleString("pt-BR");
   container.innerHTML = `
     <div class="sheet">
-      <h1>${escapeHtml(event ? event.name : "")} — ${escapeHtml(heat.prova_name || "")}</h1>
-      <h2>${escapeHtml(heat.name)} ·
+      <h1>${escapeHtml(event ? event.name : "")} — ${escapeHtml(
+        prova ? Labels.provaLabel(prova) : heat.prova_name || ""
+      )}</h1>
+      <h2><span class="level-chip bateria">BATERIA</span> ${escapeHtml(
+        Labels.bateriaLabel(heat, { includeProva: false })
+      )} ·
         <span class="badge ${escapeHtml(status)}">${escapeHtml(
           BADGE_LABELS[status] || "Provisório"
         )}</span> · revisão ${escapeHtml(String(revision))}</h2>
@@ -49,8 +57,8 @@ function render(heat, event) {
         <span>Impresso em: ${escapeHtml(printedAt)}</span>
       </div>
       <table>
-        <thead><tr><th>Raia</th><th>Atleta</th><th>Equipe</th><th>Tempo</th><th>Status</th></tr></thead>
-        <tbody>${rows || '<tr><td colspan="5">Sem participantes.</td></tr>'}</tbody>
+        <thead><tr><th>Nível</th><th>Raia</th><th>Atleta</th><th>Equipe</th><th>Tempo</th><th>Status</th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="6">Sem participantes.</td></tr>'}</tbody>
       </table>
       <div class="signatures">
         <div>Árbitro</div>

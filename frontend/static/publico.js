@@ -15,7 +15,6 @@ const {
   lastFinished: lastFinishedSeq,
   nextInProva,
   nextProvaAfter,
-  provaHeaderLabel,
 } = window.SequenceLogic;
 const { displayName } = window.ResultsLogic;
 const {
@@ -97,6 +96,22 @@ function provasSorted() {
   return [...eventData.provas].sort((a, b) => a.order_num - b.order_num);
 }
 
+function heatLabel(heat) {
+  return Labels.bateriaLabel(heat, {
+    index: heat.heat_index_in_prova,
+    total: heat.heats_in_prova,
+    provaOrder: heat.prova_order_num,
+    includeProva: true,
+  });
+}
+
+function provaSeal(prova) {
+  if (!prova) return "";
+  return `<div class="pub-label" style="color:var(--lvl-prova)"><span class="level-chip prova"><span class="level-icon">◆</span>PROVA</span> ${escapeHtml(
+    Labels.provaLabel(prova)
+  )}</div>`;
+}
+
 function snapshotLabel(status) {
   return (
     {
@@ -169,6 +184,9 @@ function applyTheme(raw) {
   root.style.setProperty("--input-bg", theme.bg2);
   root.style.setProperty("--cyan", theme.accent);
   root.style.setProperty("--cyan-strong", theme.accent_strong);
+  root.style.setProperty("--lvl-evento", theme.text);
+  root.style.setProperty("--lvl-prova", theme.lvl_prova);
+  root.style.setProperty("--lvl-bateria", theme.lvl_bateria);
   root.style.setProperty("--text", theme.text);
   root.style.setProperty("--muted", theme.muted);
   root.style.setProperty("--pub-font-scale", String(theme.font_scale));
@@ -249,7 +267,7 @@ function classificationTable(data) {
   const badge = data.is_provisional ? "provisória" : "definitiva";
   const mode = data.mixed_ranking || "both";
   const section = (title, standings, excluded = []) => `
-    <div class="pub-label" style="color:var(--cyan)">${escapeHtml(title)} ${badge}</div>
+    <div class="pub-label" style="color:var(--lvl-prova)"><span class="level-chip prova"><span class="level-icon">◆</span>PROVA</span> ${escapeHtml(title)} ${badge}</div>
     <div class="pub-table pub-battery" style="margin-bottom:12px">
       <div class="pub-thead"><div>Pos</div><div>Atleta</div><div>Equipe</div><div style="text-align:right">Tempo</div></div>
       ${classificationRows(standings, excluded) || '<div class="pub-trow"><div class="muted">Sem resultados</div></div>'}
@@ -515,7 +533,7 @@ function viewWaiting() {
     .slice(0, 4)
     .map(
       (heat) =>
-        `<div class="pub-up-item"><span class="pub-up-num">${heat.event_seq}</span><span>${escapeHtml(provaHeaderLabel(heat))} <span class="muted">· ${heatTypeLabel(heat)}</span></span></div>`
+        `<div class="pub-up-item"><span class="pub-up-num">${heat.event_seq}</span><span>${escapeHtml(heatLabel(heat))} <span class="muted">· ${heatTypeLabel(heat)}</span></span></div>`
     )
     .join("");
   return `
@@ -550,7 +568,7 @@ function viewReady() {
     <div class="pub-center">
       ${eventLogo()}
       <div class="pub-label">A seguir</div>
-      <div class="pub-heat-name">${escapeHtml(provaHeaderLabel(heat))}</div>
+      <div class="pub-heat-name">${escapeHtml(heatLabel(heat))}</div>
       <div class="pub-heat-type">${heatTypeLabel(heat)}</div>
       <div class="pub-lane-grid">${cards || '<div class="muted">Sem participantes</div>'}</div>
     </div>
@@ -568,7 +586,7 @@ function viewRacing() {
     <div class="pub-racing-top">
       <div class="pub-racing-meta">
         <div class="muted" style="font-size:calc(clamp(14px,1.4vw,22px) * var(--pub-font-scale))">${escapeHtml(eventTitle())}</div>
-        <div class="pub-heat-name">${escapeHtml(provaHeaderLabel(heat))}</div>
+        <div class="pub-heat-name">${escapeHtml(heatLabel(heat))}</div>
         <div class="pub-heat-type">${heatTypeLabel(heat)}</div>
       </div>
       <div class="pub-racing-clock">${clock}</div>
@@ -717,11 +735,12 @@ function viewResult() {
   if (!heat) return viewWaiting();
   const prova = provaOf(heat);
   const consolidated =
-    prova && prova.consolidate_results ? classifications[prova.id] : null;
+    prova ? classifications[prova.id] : null;
   return `
     <div class="pub-center" style="justify-content:flex-start;padding-top:12px">
-      <div class="pub-label" style="color:var(--cyan)">🏁 Resultado da bateria</div>
-      <div class="pub-heat-name">${escapeHtml(provaHeaderLabel(heat))}</div>
+      ${provaSeal(prova)}
+      <div class="pub-label" style="color:var(--lvl-bateria)"><span class="level-chip bateria"><span class="level-icon">▸</span>BATERIA</span> RESULTADO DA BATERIA</div>
+      <div class="pub-heat-name">${escapeHtml(heatLabel(heat))}</div>
       <div class="pub-heat-type">${heatTypeLabel(heat)}</div>
       ${heat.result_snapshot && snapshotLabel(heat.result_snapshot.status) ? `<div class="pub-label">${escapeHtml(snapshotLabel(heat.result_snapshot.status))}</div>` : ""}
       ${podium(heat)}
@@ -743,7 +762,7 @@ function viewInterval() {
     const lanes = participantLanes(inProva);
     nextInfo = `
       <div class="pub-label">A seguir</div>
-      <div class="pub-heat-name">${escapeHtml(provaHeaderLabel(inProva))}</div>
+      <div class="pub-heat-name">${escapeHtml(heatLabel(inProva))}</div>
       <div class="pub-heat-type">${heatTypeLabel(inProva)}</div>
       <div style="margin-top:24px">
         ${lanes.map((lane) => `<div class="pub-up-item"><span class="pub-up-num">R${lane.lane_number}</span><span>${escapeHtml(pubName(lane.participant_name) || "—")} <span class="muted">· ${escapeHtml(lane.team || "sem equipe")}</span></span></div>`).join("") || '<div class="muted">Sem participantes</div>'}
@@ -751,19 +770,19 @@ function viewInterval() {
   } else if (nextProva) {
     nextInfo = `
       <div class="pub-label">Próxima prova:</div>
-      <div class="pub-heat-name">${escapeHtml(`${nextProva.prova.order_num}. ${nextProva.prova.name}`)}</div>
-      <div class="pub-heat-type">${escapeHtml(provaHeaderLabel(nextProva.heat))}</div>`;
+      <div class="pub-heat-name">${escapeHtml(Labels.provaLabel(nextProva.prova))}</div>
+      <div class="pub-heat-type">${escapeHtml(heatLabel(nextProva.heat))}</div>`;
   } else {
     nextInfo = '<div class="muted">Nenhuma próxima bateria</div>';
   }
   const prova = heat ? provaOf(heat) : null;
   const partial =
-    prova && prova.consolidate_results ? classifications[prova.id] : null;
+    prova ? classifications[prova.id] : null;
   return `
     <div style="display:flex;flex-direction:column;height:100%">
       <div class="pub-interval">
         <div class="pub-interval-col">
-          <div class="pub-label">Resultado — ${heat ? escapeHtml(provaHeaderLabel(heat)) : ""}</div>
+          <div class="pub-label">Resultado — ${heat ? escapeHtml(heatLabel(heat)) : ""}</div>
           ${heat ? compactTable(heat) : ""}
           ${partial ? classificationTable(partial) : ""}
         </div>
@@ -783,7 +802,7 @@ function perBatteryResult(prova, heat) {
     .map(
       (item) => `
       <div class="pub-end-group">
-        <div class="pub-heat-name" style="font-size:calc(clamp(18px,2vw,30px) * var(--pub-font-scale))">Bateria ${item.heat_index_in_prova ?? item.order_num} · ${escapeHtml(item.name)}</div>
+        <div class="pub-heat-name" style="font-size:calc(clamp(18px,2vw,30px) * var(--pub-font-scale))"><span class="level-chip bateria"><span class="level-icon">▸</span>BATERIA</span> ${escapeHtml(Labels.bateriaLabel(item))}</div>
         ${compactTable(item)}
       </div>`
     )
@@ -795,7 +814,7 @@ function viewProvaResult() {
   if (!heat) return viewWaiting();
   const prova = provaOf(heat);
   const data =
-    prova && prova.consolidate_results ? classifications[prova.id] : null;
+    prova ? classifications[prova.id] : null;
   const meta = prova
     ? [
         prova.naipe === "MISTO" ? "Misto" : "",
@@ -807,9 +826,16 @@ function viewProvaResult() {
     : "";
   return `
     <div class="pub-center" style="justify-content:flex-start;padding-top:16px">
-      <div class="pub-label" style="color:var(--cyan)">🏁 Resultado final da prova</div>
-      <div class="pub-heat-name">${escapeHtml(prova ? `${prova.order_num}. ${prova.name}` : heat.prova_name || heat.name)}</div>
+      ${provaSeal(prova)}
+      <div class="pub-label" style="color:var(--lvl-prova)"><span class="level-chip prova"><span class="level-icon">◆</span>PROVA</span> RESULTADO FINAL DA PROVA</div>
+      <div class="pub-heat-name">${escapeHtml(prova ? Labels.provaLabel(prova) : heat.prova_name || heat.name)}</div>
       ${meta ? `<div class="pub-heat-type">${escapeHtml(meta)}</div>` : ""}
+      <div class="pub-subtitle" style="margin-bottom:8px">${escapeHtml(
+        Labels.classificationHelp(
+          true,
+          heats().filter((item) => item.prova_id === (prova ? prova.id : heat.prova_id)).length
+        )
+      )}</div>
       ${provaSnapshotLabel(prova) ? `<div class="pub-label">${escapeHtml(provaSnapshotLabel(prova))}</div>` : ""}
       <div class="pub-result-table" style="width:100%;max-width:1100px;margin-top:12px">
         ${data ? classificationTable(data) : perBatteryResult(prova, heat)}
@@ -834,9 +860,7 @@ function viewSlide() {
 }
 
 function viewProvaSlide(prova) {
-  const data = prova.consolidate_results
-    ? classifications[prova.id]
-    : null;
+  const data = prova ? classifications[prova.id] : null;
   const provaHeats = heats().filter((heat) => heat.prova_id === prova.id);
   const body = data
     ? classificationTable(data)
@@ -844,7 +868,7 @@ function viewProvaSlide(prova) {
         .map(
           (heat) => `
           <div class="pub-end-group">
-            <div class="pub-heat-name" style="font-size:calc(clamp(18px,2vw,30px) * var(--pub-font-scale))">Bateria ${heat.heat_index_in_prova ?? heat.order_num} · ${escapeHtml(heat.name)}</div>
+            <div class="pub-heat-name" style="font-size:calc(clamp(18px,2vw,30px) * var(--pub-font-scale))"><span class="level-chip bateria"><span class="level-icon">▸</span>BATERIA</span> ${escapeHtml(Labels.bateriaLabel(heat))}</div>
             ${compactTable(heat)}
           </div>`
         )
@@ -859,9 +883,13 @@ function viewProvaSlide(prova) {
     .join(" · ");
   return `
     <div class="pub-center" style="justify-content:flex-start;padding-top:16px">
-      <div class="pub-label" style="color:var(--cyan)">🏁 Resultado da prova</div>
-      <div class="pub-heat-name">${prova.order_num}. ${escapeHtml(prova.name)}</div>
+      ${provaSeal(prova)}
+      <div class="pub-label" style="color:var(--lvl-prova)"><span class="level-chip prova"><span class="level-icon">◆</span>PROVA</span> RESULTADO FINAL DA PROVA</div>
+      <div class="pub-heat-name">${escapeHtml(Labels.provaLabel(prova))}</div>
       ${meta ? `<div class="pub-heat-type">${escapeHtml(meta)}</div>` : ""}
+      <div class="pub-subtitle" style="margin-bottom:8px">${escapeHtml(
+        Labels.classificationHelp(true, provaHeats.length)
+      )}</div>
       ${provaSnapshotLabel(prova) ? `<div class="pub-label">${escapeHtml(provaSnapshotLabel(prova))}</div>` : ""}
       <div class="pub-result-table" style="width:100%;max-width:1100px;margin-top:12px">
         ${body}
@@ -873,8 +901,9 @@ function viewProvaSlide(prova) {
 function viewBatterySlide(heat) {
   return `
     <div class="pub-center" style="justify-content:flex-start;padding-top:12px">
-      <div class="pub-label" style="color:var(--cyan)">🏁 Resultado da bateria</div>
-      <div class="pub-heat-name">${escapeHtml(provaHeaderLabel(heat))}</div>
+      ${provaSeal(prova)}
+      <div class="pub-label" style="color:var(--lvl-bateria)"><span class="level-chip bateria"><span class="level-icon">▸</span>BATERIA</span> RESULTADO DA BATERIA</div>
+      <div class="pub-heat-name">${escapeHtml(heatLabel(heat))}</div>
       <div class="pub-heat-type">${heatTypeLabel(heat)}</div>
       ${heat.result_snapshot && snapshotLabel(heat.result_snapshot.status) ? `<div class="pub-label">${escapeHtml(snapshotLabel(heat.result_snapshot.status))}</div>` : ""}
       ${podium(heat)}
@@ -892,23 +921,21 @@ function viewEnded() {
         (heat) => heat.prova_id === prova.id && heat.status === "finished"
       );
       if (!provaHeats.length) return "";
-      const data = prova.consolidate_results
-        ? classifications[prova.id]
-        : null;
+      const data = prova ? classifications[prova.id] : null;
       const body = data
         ? classificationTable(data)
         : provaHeats
             .map(
               (heat) => `
               <div class="pub-end-group">
-                <div class="pub-heat-name" style="font-size:calc(clamp(18px,2vw,30px) * var(--pub-font-scale))">Bateria ${heat.heat_index_in_prova ?? heat.order_num} · ${escapeHtml(heat.name)}</div>
+                <div class="pub-heat-name" style="font-size:calc(clamp(18px,2vw,30px) * var(--pub-font-scale))"><span class="level-chip bateria"><span class="level-icon">▸</span>BATERIA</span> ${escapeHtml(Labels.bateriaLabel(heat))}</div>
                 ${compactTable(heat)}
               </div>`
             )
             .join("");
       return `
         <div class="pub-end-group">
-          <div class="pub-heat-name" style="font-size:calc(clamp(20px,2.2vw,34px) * var(--pub-font-scale))">${prova.order_num}. ${escapeHtml(prova.name)}</div>
+          <div class="pub-heat-name" style="font-size:calc(clamp(20px,2.2vw,34px) * var(--pub-font-scale))"><span class="level-chip prova"><span class="level-icon">◆</span>PROVA</span> ${escapeHtml(Labels.provaLabel(prova))}</div>
           ${body}
         </div>`;
     })
@@ -955,7 +982,6 @@ async function refreshClassifications() {
   if (!eventData || !eventData.provas) return;
   const targets = eventData.provas.filter(
     (prova) =>
-      prova.consolidate_results &&
       eventData.heats.some(
         (heat) => heat.prova_id === prova.id && heat.status === "finished"
       )
@@ -994,12 +1020,12 @@ function upsertProva(payload) {
     event_id: payload.event_id,
     name: payload.name,
     order_num: payload.order_num,
+    format: payload.format,
     stroke: payload.stroke,
     distance_m: payload.distance_m,
     naipe: payload.naipe,
     mixed_ranking: payload.mixed_ranking,
     category: payload.category,
-    consolidate_results: payload.consolidate_results,
     classification_criterion: payload.classification_criterion,
     status: payload.status,
   };

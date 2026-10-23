@@ -14,6 +14,7 @@ from ..models import (
 )
 from ..schemas import compute_speed, format_race_time
 from . import presentation
+from .provas import group_mixed_ranking, is_legacy_incomplete
 from .snapshots import latest_by_heat, snapshot_summary
 
 
@@ -106,9 +107,9 @@ async def _heat_sequences(
 ) -> dict[str, dict]:
     """Posicao canonica de cada bateria no evento.
 
-    A sequencia global ordena por (prova.order_num, heat.order_num) e e a
-    unica forma correta de "proxima bateria" — order_num isolado reinicia a
-    cada prova e mistura provas.
+    `heat.order_num` e unico por evento (ADR-012), entao a sequencia global e
+    exatamente a ordem do programa. `heat_index_in_prova` e a posicao entre as
+    baterias do mesmo grupo (prova) nessa ordem.
     """
     sequences: dict[str, dict] = {}
     for event_id in event_ids:
@@ -122,7 +123,7 @@ async def _heat_sequences(
             select(Heat, Prova)
             .join(Prova, Heat.prova_id == Prova.id)
             .where(Heat.event_id == event_id)
-            .order_by(Prova.order_num, Heat.order_num)
+            .order_by(Heat.order_num)
         )
         index_in_prova: dict[str, int] = {}
         for event_seq, (heat, prova) in enumerate(result.all(), start=1):
@@ -233,6 +234,18 @@ async def _heats_payload(
                 "heat_index_in_prova": sequence.get("heat_index_in_prova"),
                 "heats_in_prova": sequence.get("heats_in_prova"),
                 "heat_type": heat.heat_type,
+                "stroke": heat.stroke,
+                "naipe": heat.naipe,
+                "category": heat.category,
+                "classify_alone": bool(heat.classify_alone),
+                "lane_count": heat.lane_count,
+                "legacy_incomplete": is_legacy_incomplete(
+                    heat.stroke,
+                    heat.naipe,
+                    heat.category,
+                    heat_type=heat.heat_type,
+                    distance_m=heat.distance_m,
+                ),
                 "distance_m": heat.distance_m,
                 "duration_s": heat.duration_s,
                 "status": heat.status,
@@ -314,12 +327,25 @@ async def _provas_payload(
                 "event_id": prova.event_id,
                 "name": prova.name,
                 "order_num": prova.order_num,
+                "format": prova.format,
                 "stroke": prova.stroke,
                 "distance_m": prova.distance_m,
                 "category": prova.category,
                 "naipe": prova.naipe,
-                "mixed_ranking": prova.mixed_ranking,
-                "consolidate_results": prova.consolidate_results,
+                "classify_alone": bool(
+                    len(prova_heats) == 1 and prova_heats[0].classify_alone
+                ),
+                "legacy_incomplete": any(
+                    is_legacy_incomplete(
+                        heat.stroke,
+                        heat.naipe,
+                        heat.category,
+                        heat_type=heat.heat_type,
+                        distance_m=heat.distance_m,
+                    )
+                    for heat in prova_heats
+                ),
+                "mixed_ranking": group_mixed_ranking(prova),
                 "classification_criterion": prova.classification_criterion,
                 "status": prova_status([heat.status for heat in prova_heats]),
                 "created_at": prova.created_at,
@@ -381,6 +407,7 @@ async def _classification_payload(
             "id": heat.id,
             "name": heat.name,
             "order_num": heat.order_num,
+            "prova_id": heat.prova_id,
             "status": heat.status,
             "distance_m": heat.distance_m,
             "lanes": [
@@ -401,19 +428,31 @@ async def _classification_payload(
         for heat in heats
     ]
     classification = build_classification(
-        consolidate_results=prova.consolidate_results,
         heats=heat_dicts,
         team_map=team_map,
         pool_distance_m=event.pool_length_m if event else None,
-        mixed_ranking=prova.mixed_ranking,
+        prova_distance_m=prova.distance_m,
+        prova_id=prova.id,
+        mixed_ranking=group_mixed_ranking(prova),
     )
     return {
         "prova_id": prova.id,
         "name": prova.name,
+        "format": prova.format,
+        "legacy_incomplete": any(
+            is_legacy_incomplete(
+                heat.stroke,
+                heat.naipe,
+                heat.category,
+                heat_type=heat.heat_type,
+                distance_m=heat.distance_m,
+            )
+            for heat in heats
+        ),
+        "distance_m": prova.distance_m,
         "naipe": prova.naipe,
         "category": prova.category,
         "status": classification["status"],
-        "consolidate_results": prova.consolidate_results,
         "classification_criterion": prova.classification_criterion,
         "mixed_ranking": classification["mixed_ranking"],
         "is_provisional": classification["is_provisional"],
@@ -421,6 +460,7 @@ async def _classification_payload(
         "standings_by_naipe": classification["standings_by_naipe"],
         "excluded": classification["excluded"],
         "battery_results": classification["battery_results"],
+        "warnings": classification["warnings"],
     }
 
 
@@ -438,12 +478,25 @@ async def _prova_summary_payload(
         "event_id": prova.event_id,
         "name": prova.name,
         "order_num": prova.order_num,
+        "format": prova.format,
         "stroke": prova.stroke,
         "distance_m": prova.distance_m,
         "category": prova.category,
         "naipe": prova.naipe,
-        "mixed_ranking": prova.mixed_ranking,
-        "consolidate_results": prova.consolidate_results,
+        "classify_alone": bool(
+            len(heats) == 1 and heats[0].classify_alone
+        ),
+        "legacy_incomplete": any(
+            is_legacy_incomplete(
+                heat.stroke,
+                heat.naipe,
+                heat.category,
+                heat_type=heat.heat_type,
+                distance_m=heat.distance_m,
+            )
+            for heat in heats
+        ),
+        "mixed_ranking": group_mixed_ranking(prova),
         "classification_criterion": prova.classification_criterion,
         "status": classification["status"],
         "heats_finished": finished,
@@ -461,6 +514,18 @@ async def _prova_summary_payload(
                     "heats_in_prova"
                 ),
                 "heat_type": heat.heat_type,
+                "stroke": heat.stroke,
+                "naipe": heat.naipe,
+                "category": heat.category,
+                "classify_alone": bool(heat.classify_alone),
+                "lane_count": heat.lane_count,
+                "legacy_incomplete": is_legacy_incomplete(
+                    heat.stroke,
+                    heat.naipe,
+                    heat.category,
+                    heat_type=heat.heat_type,
+                    distance_m=heat.distance_m,
+                ),
                 "distance_m": heat.distance_m,
                 "duration_s": heat.duration_s,
                 "status": heat.status,
@@ -478,6 +543,7 @@ async def _prova_summary_payload(
             "standings_by_naipe": classification["standings_by_naipe"],
             "excluded": classification["excluded"],
             "battery_results": classification["battery_results"],
+            "warnings": classification["warnings"],
         },
     }
 
@@ -528,7 +594,7 @@ async def _event_payload(
         select(Heat)
         .join(Prova, Heat.prova_id == Prova.id)
         .where(Heat.event_id == event.id)
-        .order_by(Prova.order_num, Heat.order_num)
+        .order_by(Heat.order_num)
     )
     heats = result.scalars().all()
     result = await session.execute(
@@ -543,6 +609,7 @@ async def _event_payload(
         "location": event.location,
         "date": event.date,
         "pool_length_m": event.pool_length_m,
+        "default_lane_count": event.default_lane_count,
         "status": event.status,
         "public_results_enabled": bool(event.public_results_enabled),
         "public_name_mode": event.public_name_mode,
@@ -556,12 +623,33 @@ async def _event_payload(
                 "event_id": prova.event_id,
                 "name": prova.name,
                 "order_num": prova.order_num,
+                "format": prova.format,
                 "stroke": prova.stroke,
                 "distance_m": prova.distance_m,
                 "category": prova.category,
                 "naipe": prova.naipe,
-                "mixed_ranking": prova.mixed_ranking,
-                "consolidate_results": prova.consolidate_results,
+                "classify_alone": bool(
+                    sum(1 for heat in heats if heat.prova_id == prova.id) == 1
+                    and next(
+                        heat
+                        for heat in heats
+                        if heat.prova_id == prova.id
+                    ).classify_alone
+                )
+                if any(heat.prova_id == prova.id for heat in heats)
+                else False,
+                "legacy_incomplete": any(
+                    heat.prova_id == prova.id
+                    and is_legacy_incomplete(
+                        heat.stroke,
+                        heat.naipe,
+                        heat.category,
+                        heat_type=heat.heat_type,
+                        distance_m=heat.distance_m,
+                    )
+                    for heat in heats
+                ),
+                "mixed_ranking": group_mixed_ranking(prova),
                 "classification_criterion": prova.classification_criterion,
                 "status": prova.status,
                 "heat_count": sum(
@@ -629,12 +717,24 @@ async def _results_tree_payload(
                 "heat_index_in_prova": sequence.get("heat_index_in_prova"),
                 "heats_in_prova": sequence.get("heats_in_prova"),
                 "heat_type": heat.heat_type,
+                "stroke": heat.stroke,
+                "naipe": heat.naipe,
+                "category": heat.category,
+                "classify_alone": bool(heat.classify_alone),
+                "lane_count": heat.lane_count,
+                "legacy_incomplete": is_legacy_incomplete(
+                    heat.stroke,
+                    heat.naipe,
+                    heat.category,
+                    heat_type=heat.heat_type,
+                    distance_m=heat.distance_m,
+                ),
                 "distance_m": heat.distance_m,
                 "duration_s": heat.duration_s,
                 "status": heat.status,
                 "started_at": heat.started_at,
                 "finished_at": heat.finished_at,
-                "lane_count": sum(stats.values()),
+                "athlete_count": sum(stats.values()),
                 "finished_count": stats.get("finished", 0),
                 "dq_count": stats.get("dq", 0),
                 "result_snapshot": snapshot_summary(latest.get(heat.id)),
@@ -654,12 +754,19 @@ async def _results_tree_payload(
                 "event_id": prova.event_id,
                 "name": prova.name,
                 "order_num": prova.order_num,
+                "format": prova.format,
                 "stroke": prova.stroke,
                 "distance_m": prova.distance_m,
                 "category": prova.category,
                 "naipe": prova.naipe,
-                "mixed_ranking": prova.mixed_ranking,
-                "consolidate_results": prova.consolidate_results,
+                "classify_alone": bool(
+                    len(prova_heats) == 1
+                    and prova_heats[0]["classify_alone"]
+                ),
+                "legacy_incomplete": any(
+                    heat["legacy_incomplete"] for heat in prova_heats
+                ),
+                "mixed_ranking": group_mixed_ranking(prova),
                 "classification_criterion": prova.classification_criterion,
                 "status": prova.status,
                 "heat_count": len(prova_heats),

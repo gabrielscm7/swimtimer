@@ -1,7 +1,7 @@
 import time
 
-from fastapi import APIRouter, Depends, HTTPException, Request
-from sqlalchemy import delete, func, select, update
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from sqlalchemy import delete, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -11,9 +11,13 @@ from ..models import Athlete, Event, Heat, HeatLane, LapEvent, Prova, Team
 from ..schemas import (
     HeatCreate,
     HeatLaneConfigRequest,
+    HeatOrderRequest,
     HeatUpdate,
-    OrderIdsRequest,
 )
+from ..services import presentation
+from ..services import provas as prova_rules
+from ..services import snapshots
+from ..services.backup import backup_service
 from ..services.broadcast import (
     _broadcast_heat,
     _broadcast_ready,
@@ -21,27 +25,28 @@ from ..services.broadcast import (
     _prova_state_message,
     manager,
 )
-from ..services import presentation
-from ..services.backup import backup_service
-from ..services.inscricao import enforce_heat_inscricao
+from ..services.heat_order import (
+    next_heat_order,
+    place_new_heat,
+    renumber_heats,
+    reorder_event_heats,
+)
+from ..services.inscricao import (
+    athlete_eligible,
+    check_override,
+    enforce_heat_inscricao,
+)
 from ..services.lane_actions import (
     _anchor_heat,
     _client_ip,
     _drop_anchor,
     _log_action,
 )
-from ..services import snapshots
-from ..services.lookups import (
-    _get_event,
-    _get_heat,
-    _get_prova,
-    _validate_reorder_ids,
-)
+from ..services.lookups import _get_event, _get_heat
 from ..services.payloads import (
     _heat_lanes,
     _heat_payload,
     _participant_lanes,
-    _prova_heats,
     _prova_payload,
     _sync_event_status,
     _sync_prova_status,
@@ -50,57 +55,63 @@ from ..services.payloads import (
 router = APIRouter()
 
 
-@router.post("/api/provas/{prova_id}/heats", status_code=201)
-async def create_heat_in_prova(
-    prova_id: str,
+async def _broadcast_provas(session: AsyncSession, prova_ids: set[str]) -> None:
+    for prova_id in prova_ids:
+        prova = await session.get(Prova, prova_id)
+        if prova is None:
+            continue
+        await manager.broadcast(
+            _prova_state_message(await _prova_payload(session, prova))
+        )
+
+
+@router.post("/api/events/{event_id}/heats", status_code=201)
+async def create_heat(
+    event_id: str,
     payload: HeatCreate,
     session: AsyncSession = Depends(get_db),
 ) -> dict:
-    if payload.heat_type == "bateria" and payload.distance_m is None:
-        raise HTTPException(status_code=400, detail="distance_m_obrigatorio")
-    if payload.heat_type == "maratona" and payload.duration_s is None:
-        raise HTTPException(status_code=400, detail="duration_s_obrigatorio")
-
-    async with _heat_guard(f"prova:{prova_id}"):
+    """Cria uma bateria; a prova do grupo é criada automaticamente."""
+    async with _heat_guard(f"event:{event_id}"):
         session.expire_all()
-        prova = await _get_prova(session, prova_id)
-        if payload.order_num is not None:
-            order_num = payload.order_num
-            result = await session.execute(
-                select(Heat.id).where(
-                    Heat.prova_id == prova_id,
-                    Heat.order_num == order_num,
-                )
-            )
-            if result.first() is not None:
-                raise HTTPException(
-                    status_code=400, detail="order_num_duplicado"
-                )
-        else:
-            result = await session.execute(
-                select(func.max(Heat.order_num)).where(
-                    Heat.prova_id == prova_id
-                )
-            )
-            order_num = int(result.scalar_one() or 0) + 1
-
-        heat = Heat(
-            event_id=prova.event_id,
-            prova_id=prova_id,
-            name=payload.name,
-            order_num=order_num,
-            heat_type=payload.heat_type,
-            distance_m=payload.distance_m,
-            duration_s=payload.duration_s,
-            status="scheduled",
-        )
+        event = await _get_event(session, event_id)
+        order_num = await next_heat_order(session, event_id)
+        values = {
+            "event_id": event_id,
+            "name": payload.name or "",
+            "order_num": order_num,
+            "heat_type": payload.heat_type,
+            "stroke": payload.stroke,
+            "naipe": payload.naipe,
+            "category": payload.category,
+            "classify_alone": payload.classify_alone,
+            "lane_count": payload.lane_count or event.default_lane_count,
+            "distance_m": (
+                payload.distance_m if payload.heat_type == "bateria" else None
+            ),
+            "duration_s": (
+                payload.duration_s if payload.heat_type == "maratona" else None
+            ),
+            "status": "scheduled",
+        }
+        # Resolve o grupo antes de persistir a bateria (prova_id e NOT NULL/FK).
+        transient = Heat(**values)
+        prova = await prova_rules.resolve_group(session, event, transient)
+        heat = Heat(prova_id=prova.id, **values)
         session.add(heat)
-        await _sync_prova_status(session, prova_id)
+        await session.flush()
+        await prova_rules.sync_prova_from_group(session, prova)
+        if payload.order_num is not None:
+            await place_new_heat(session, event_id, heat, payload.order_num)
+        await prova_rules.renumber_provas(session, event_id)
+        await _sync_prova_status(session, prova.id)
         try:
             await session.commit()
         except IntegrityError:
             await session.rollback()
-            raise HTTPException(status_code=400, detail="order_num_duplicado")
+            raise HTTPException(
+                status_code=400, detail="order_num_duplicado"
+            )
         await session.refresh(heat)
         await session.refresh(prova)
         changed, _became_finished = await _sync_event_status(
@@ -108,22 +119,29 @@ async def create_heat_in_prova(
         )
         if changed:
             await session.commit()
+        payload_out = await _heat_payload(session, heat)
+        prova_payload = await _prova_payload(session, prova)
 
     await _broadcast_server_status()
-    await manager.broadcast(
-        _prova_state_message(await _prova_payload(session, prova))
-    )
-    return await _heat_payload(session, heat)
+    await manager.broadcast(_prova_state_message(prova_payload))
+    return payload_out
 
 
-@router.get("/api/provas/{prova_id}/heats")
-async def list_heats_in_prova(
-    prova_id: str,
+@router.get("/api/events/{event_id}/heats")
+async def list_heats(
+    event_id: str,
     session: AsyncSession = Depends(get_db),
 ) -> list[dict]:
-    await _get_prova(session, prova_id)
-    heats = await _prova_heats(session, prova_id)
-    return [await _heat_payload(session, heat) for heat in heats]
+    await _get_event(session, event_id)
+    result = await session.execute(
+        select(Heat)
+        .where(Heat.event_id == event_id)
+        .order_by(Heat.order_num)
+    )
+    return [
+        await _heat_payload(session, heat)
+        for heat in result.scalars().all()
+    ]
 
 
 @router.get("/api/heats/{heat_id}")
@@ -149,120 +167,249 @@ async def list_heat_snapshots(
     return [snapshots.snapshot_summary(row) for row in rows]
 
 
-@router.get("/api/events/{event_id}/heats")
-async def list_heats(
-    event_id: str,
+@router.get("/api/heats/{heat_id}/eligible-athletes")
+async def eligible_athletes(
+    heat_id: str,
+    team_id: str = Query(..., min_length=1),
     session: AsyncSession = Depends(get_db),
 ) -> list[dict]:
-    await _get_event(session, event_id)
+    """Atletas elegíveis da equipe, marcando os já alocados no grupo."""
+    heat = await _get_heat(session, heat_id)
+    team = await session.get(Team, team_id)
+    if team is None or team.event_id != heat.event_id:
+        raise HTTPException(status_code=404, detail="equipe_nao_encontrada")
+
     result = await session.execute(
-        select(Heat)
-        .join(Prova, Heat.prova_id == Prova.id)
-        .where(Heat.event_id == event_id)
-        .order_by(Prova.order_num, Heat.order_num)
+        select(Athlete)
+        .where(
+            Athlete.event_id == heat.event_id,
+            Athlete.team_id == team_id,
+        )
+        .order_by(Athlete.name)
     )
-    return [
-        await _heat_payload(session, heat)
-        for heat in result.scalars().all()
-    ]
+    athlete_rows = list(result.scalars().all())
+
+    allocated: dict[str, Heat] = {}
+    result = await session.execute(
+        select(HeatLane.athlete_id, Heat)
+        .join(Heat, HeatLane.heat_id == Heat.id)
+        .where(
+            Heat.prova_id == heat.prova_id,
+            HeatLane.athlete_id.is_not(None),
+        )
+    )
+    for athlete_id, alloc_heat in result.all():
+        if athlete_id:
+            allocated[athlete_id] = alloc_heat
+
+    payload = []
+    for athlete in athlete_rows:
+        if not athlete_eligible(athlete, heat):
+            continue
+        alloc = allocated.get(athlete.id)
+        payload.append(
+            {
+                "id": athlete.id,
+                "event_id": athlete.event_id,
+                "team_id": athlete.team_id,
+                "name": athlete.name,
+                "naipe": athlete.naipe,
+                "category": athlete.category,
+                "registration_code": athlete.registration_code,
+                "allocated": alloc is not None,
+                "allocated_heat_id": alloc.id if alloc else None,
+                "allocated_heat_name": alloc.name if alloc else None,
+            }
+        )
+    return payload
 
 
 @router.patch("/api/heats/{heat_id}")
 async def update_heat(
     heat_id: str,
     payload: HeatUpdate,
+    request: Request,
     session: AsyncSession = Depends(get_db),
 ) -> dict:
     heat = await _get_heat(session, heat_id)
-    async with _heat_guard(heat_id):
+    event_id = heat.event_id
+    async with _heat_guard(f"event:{event_id}"):
         session.expire_all()
         heat = await _get_heat(session, heat_id)
-        if heat.status not in ("scheduled", "ready_check"):
-            raise HTTPException(status_code=409, detail="bateria_ja_iniciada")
-        data = payload.model_dump(exclude_unset=True)
-        if heat.heat_type == "bateria":
-            if data.get("duration_s") is not None:
-                raise HTTPException(
-                    status_code=422, detail="campo_incompativel_bateria"
-                )
-            if "distance_m" in data and data["distance_m"] is None:
-                raise HTTPException(
-                    status_code=422, detail="distance_m_obrigatorio"
-                )
-        else:
-            if data.get("distance_m") is not None:
-                raise HTTPException(
-                    status_code=422, detail="campo_incompativel_maratona"
-                )
-            if "duration_s" in data and data["duration_s"] is None:
-                raise HTTPException(
-                    status_code=422, detail="duration_s_obrigatorio"
-                )
-        new_order = data.get("order_num")
-        if new_order is not None and new_order != heat.order_num:
-            result = await session.execute(
-                select(Heat.id).where(
-                    Heat.prova_id == heat.prova_id,
-                    Heat.order_num == new_order,
-                    Heat.id != heat.id,
-                )
+        event = await _get_event(session, event_id)
+        if heat.status not in ("scheduled", "ready_check", "finished"):
+            raise HTTPException(
+                status_code=409, detail="bateria_ja_iniciada"
             )
-            if result.first() is not None:
+        data = payload.model_dump(
+            exclude_unset=True, exclude={"force", "override_reason"}
+        )
+        old_prova_id = heat.prova_id
+
+        group_fields = {
+            "heat_type",
+            "stroke",
+            "naipe",
+            "category",
+            "distance_m",
+            "duration_s",
+        }
+        group_touched = bool(group_fields & set(data))
+        regroups = group_touched or "classify_alone" in data
+
+        has_result = heat.status == "finished" or (
+            await snapshots.latest_for_heat(session, heat.id)
+        ) is not None
+        if has_result and group_fields & set(data):
+            if not payload.force:
                 raise HTTPException(
-                    status_code=400, detail="order_num_duplicado"
+                    status_code=409, detail="bateria_com_resultado"
                 )
+            check_override(request, True, payload.override_reason)
+
+        candidate_type = data.get("heat_type", heat.heat_type)
+        candidate_stroke = data.get("stroke", heat.stroke)
+        candidate_naipe = data.get("naipe", heat.naipe)
+        candidate_category = data.get("category", heat.category)
+        candidate_distance = data.get("distance_m", heat.distance_m)
+        candidate_duration = data.get("duration_s", heat.duration_s)
+
+        if group_touched:
+            if not candidate_stroke or not candidate_naipe or not candidate_category:
+                raise HTTPException(
+                    status_code=422, detail="grupo_incompleto"
+                )
+            if candidate_type == "bateria":
+                if candidate_distance is None:
+                    raise HTTPException(
+                        status_code=422, detail="distance_m_obrigatorio"
+                    )
+                if "duration_s" in data and data["duration_s"] is not None:
+                    raise HTTPException(
+                        status_code=422,
+                        detail="campo_incompativel_bateria",
+                    )
+            else:
+                if candidate_duration is None:
+                    raise HTTPException(
+                        status_code=422, detail="duration_s_obrigatorio"
+                    )
+                candidate_distance = None
+
+        if "lane_count" in data:
+            occupied = await _heat_lanes(session, heat.id)
+            highest = max(
+                (lane.lane_number for lane in occupied), default=0
+            )
+            if highest > data["lane_count"]:
+                raise HTTPException(
+                    status_code=422, detail="lane_count_menor_que_raias"
+                )
+
         for field, value in data.items():
             setattr(heat, field, value)
-        await _sync_prova_status(session, heat.prova_id)
+        if candidate_type == "bateria":
+            heat.distance_m = candidate_distance
+            if "duration_s" in data:
+                heat.duration_s = None
+        else:
+            heat.distance_m = None
+            heat.duration_s = candidate_duration
+
+        if regroups:
+            _prova, _previous = await prova_rules.attach_heat_to_group(
+                session, event, heat
+            )
+            if old_prova_id and old_prova_id != heat.prova_id:
+                await prova_rules.remove_prova_if_empty(
+                    session, old_prova_id
+                )
+            await prova_rules.renumber_provas(session, event_id)
+
+        if has_result and payload.force and group_fields & set(data):
+            snapshot = await snapshots.record_revision(
+                session,
+                heat,
+                reason=snapshots.REASON_GROUP_CHANGE,
+                status=snapshots.SNAPSHOT_CORRECTED,
+                role="supervisor",
+                ip=_client_ip(request),
+                lock=False,
+            )
+            now = time.time()
+            _log_action(
+                session,
+                action="override_grupo",
+                received_at=now,
+                effective_ts=now,
+                event_id=heat.event_id,
+                heat_id=heat.id,
+                source_ip=_client_ip(request),
+                payload={
+                    "reason": (payload.override_reason or "").strip(),
+                    "snapshot_id": snapshot.id,
+                    "revision": snapshot.revision,
+                },
+            )
+
+        prova = await session.get(Prova, heat.prova_id)
+        if prova is not None:
+            await _sync_prova_status(session, prova.id)
         try:
             await session.commit()
         except IntegrityError:
             await session.rollback()
-            raise HTTPException(status_code=400, detail="order_num_duplicado")
+            raise HTTPException(
+                status_code=400, detail="order_num_duplicado"
+            )
         await session.refresh(heat)
         await _broadcast_heat(session, heat)
-        return await _heat_payload(session, heat)
+        payload_out = await _heat_payload(session, heat)
+        prova_ids = {heat.prova_id}
+        if old_prova_id:
+            prova_ids.add(old_prova_id)
+
+    await _broadcast_provas(session, prova_ids)
+    return payload_out
 
 
-@router.put("/api/provas/{prova_id}/heats/order")
-async def reorder_heats(
-    prova_id: str,
-    payload: OrderIdsRequest,
+@router.patch("/api/events/{event_id}/heats/order")
+async def order_heats(
+    event_id: str,
+    payload: HeatOrderRequest,
     session: AsyncSession = Depends(get_db),
 ) -> list[dict]:
-    """Reordena todas as baterias de uma prova em uma unica transacao."""
-    async with _heat_guard(f"prova:{prova_id}"):
+    """Reordena baterias do evento (lista completa ou mover para posição N)."""
+    async with _heat_guard(f"event:{event_id}"):
         session.expire_all()
-        prova = await _get_prova(session, prova_id)
+        await _get_event(session, event_id)
+        heats = await reorder_event_heats(session, event_id, payload)
+        await prova_rules.renumber_provas(session, event_id)
         result = await session.execute(
-            select(Heat).where(Heat.prova_id == prova_id)
+            select(Prova)
+            .where(Prova.event_id == event_id)
+            .order_by(Prova.order_num)
         )
-        heats = list(result.scalars().all())
-        _validate_reorder_ids(payload.ids, {heat.id for heat in heats})
-        if any(
-            heat.status not in ("scheduled", "ready_check")
-            for heat in heats
-        ):
-            raise HTTPException(status_code=409, detail="bateria_ja_iniciada")
-
-        offset = 100000
-        await session.execute(
-            update(Heat)
-            .where(Heat.prova_id == prova_id)
-            .values(order_num=Heat.order_num + offset),
-            execution_options={"synchronize_session": False},
-        )
-        session.expire_all()
-        for index, heat_id in enumerate(payload.ids):
-            heat = await session.get(Heat, heat_id)
-            heat.order_num = index + 1
+        provas = list(result.scalars().all())
         await session.commit()
+        prova_payloads = await _provas_payload_for_broadcast(
+            session, provas
+        )
+        heat_payloads = [
+            await _heat_payload(session, heat) for heat in heats
+        ]
 
-        await session.refresh(prova)
-        payload_out = await _prova_payload(session, prova)
+    for prova_payload in prova_payloads:
+        await manager.broadcast(_prova_state_message(prova_payload))
+    return heat_payloads
 
-    await manager.broadcast(_prova_state_message(payload_out))
-    return payload_out["heats"]
+
+async def _provas_payload_for_broadcast(
+    session: AsyncSession, provas: list[Prova]
+) -> list[dict]:
+    from ..services.payloads import _provas_payload
+
+    return await _provas_payload(session, provas, include_heats=True)
 
 
 @router.delete("/api/heats/{heat_id}", status_code=204)
@@ -274,7 +421,7 @@ async def delete_heat(
     prova_id = heat.prova_id
     event_id = heat.event_id
     became_finished = False
-    async with _heat_guard(heat_id):
+    async with _heat_guard(f"event:{event_id}"):
         session.expire_all()
         heat = await _get_heat(session, heat_id)
         if heat.status != "scheduled":
@@ -290,7 +437,12 @@ async def delete_heat(
         )
         await session.delete(heat)
         await session.flush()
-        await _sync_prova_status(session, prova_id)
+        await renumber_heats(session, event_id)
+        await prova_rules.remove_prova_if_empty(session, prova_id)
+        await session.flush()
+        await prova_rules.renumber_provas(session, event_id)
+        if await session.get(Prova, prova_id) is not None:
+            await _sync_prova_status(session, prova_id)
         await session.commit()
         event = await session.get(Event, event_id)
         if event is not None:
@@ -305,17 +457,20 @@ async def delete_heat(
         changed, became_finished = await _sync_event_status(session, event_id)
         if changed or event is not None:
             await session.commit()
-        prova = await session.get(Prova, prova_id)
-        payload_out = (
-            _prova_state_message(await _prova_payload(session, prova))
-            if prova is not None
-            else None
+        result = await session.execute(
+            select(Prova)
+            .where(Prova.event_id == event_id)
+            .order_by(Prova.order_num)
+        )
+        provas = list(result.scalars().all())
+        prova_payloads = await _provas_payload_for_broadcast(
+            session, provas
         )
     await _broadcast_server_status()
     if became_finished:
         await backup_service.backup_now(event_id, kind="final")
-    if payload_out is not None:
-        await manager.broadcast(payload_out)
+    for prova_payload in prova_payloads:
+        await manager.broadcast(_prova_state_message(prova_payload))
 
 
 @router.post("/api/heats/{heat_id}/open-ready-check")
@@ -600,6 +755,10 @@ async def configure_lanes(
         heat = await _get_heat(session, heat_id)
         if heat.status not in ("scheduled", "ready_check"):
             raise HTTPException(status_code=409, detail="bateria_ja_iniciada")
+        if any(item.lane_number > heat.lane_count for item in payload.lanes):
+            raise HTTPException(
+                status_code=422, detail="raia_acima_de_lane_count"
+            )
 
         existing = {
             lane.lane_number: lane for lane in await _heat_lanes(session, heat.id)

@@ -29,7 +29,7 @@ function renderOverview() {
       (prova) => `
       <tr data-action="open-prova" data-id="${prova.id}">
         <td>${prova.order_num}</td>
-        <td>${escapeHtml(prova.name)}</td>
+        <td>${escapeHtml(Labels.provaLabel(prova))}</td>
         <td>${escapeHtml(provaMeta(prova) || "—")}</td>
         <td>${heatsOfProva(prova.id).length}</td>
         <td><span class="status-pill ${prova.status}">${statusLabel(prova.status)}</span></td>
@@ -41,9 +41,8 @@ function renderOverview() {
       const prova = provas.find((item) => item.id === heat.prova_id);
       return `
       <tr data-action="open-heat" data-id="${heat.id}">
-        <td>${escapeHtml(prova ? prova.name : "—")}</td>
-        <td>B${heat.order_num}</td>
-        <td>${escapeHtml(heat.name)}</td>
+        <td>${escapeHtml(prova ? Labels.provaLabel(prova) : "—")}</td>
+        <td>${escapeHtml(Labels.bateriaLabel(heat))}</td>
         <td>${heat.heat_type === "bateria" ? "Bateria" : "Maratona"}</td>
         <td>${heatDistanceText(heat)}</td>
         <td>${participantsOfHeat(heat).length}</td>
@@ -65,14 +64,14 @@ function renderOverview() {
       ${
         provas.length
           ? `<table class="data-table"><thead><tr><th>Ordem</th><th>Prova</th><th>Modalidade</th><th>Baterias</th><th>Status</th></tr></thead><tbody>${provaRows}</tbody></table>`
-          : `<div class="empty-state"><p>Nenhuma prova criada.</p><p class="muted">Crie uma prova na aba "Provas e baterias".</p></div>`
+          : `<div class="empty-state"><p>Nenhuma prova criada.</p><p class="muted">Crie baterias na aba "Baterias".</p></div>`
       }
     </div>
     <div class="panel">
       <h2>Baterias</h2>
       ${
         heats.length
-          ? `<table class="data-table"><thead><tr><th>Prova</th><th>Bateria</th><th>Nome</th><th>Tipo</th><th>Distância</th><th>Participantes</th><th>Status</th></tr></thead><tbody>${heatRows}</tbody></table>`
+          ? `<table class="data-table"><thead><tr><th>Prova</th><th>Bateria</th><th>Tipo</th><th>Distância</th><th>Participantes</th><th>Status</th></tr></thead><tbody>${heatRows}</tbody></table>`
           : `<div class="empty-state"><p>Nenhuma bateria criada.</p></div>`
       }
     </div>
@@ -104,6 +103,12 @@ function renderSettings() {
             <label><input type="radio" name="set-pool" value="25" ${state.eventData.pool_length_m === 25 ? "checked" : ""} /> 25m</label>
             <label><input type="radio" name="set-pool" value="50" ${state.eventData.pool_length_m === 50 ? "checked" : ""} /> 50m</label>
           </div>
+        </div>
+        <div>
+          <label>Raias padrão para novas baterias</label>
+          <select id="set-lane-count">
+            ${[1,2,3,4,5,6,7,8].map((value) => `<option value="${value}" ${value === (state.eventData.default_lane_count || 3) ? "selected" : ""}>${value}</option>`).join("")}
+          </select>
         </div>
       </div>
       <button class="primary" data-action="save-settings">Salvar configurações</button>
@@ -147,9 +152,16 @@ async function saveSettings(button) {
     setFieldError("set-error", "Informe o nome do evento");
     return;
   }
+  if (!payload.date) {
+    setFieldError("set-error", "Informe a data do evento (um único dia)");
+    return;
+  }
   setFieldError("set-error", "");
   await withButton(button, async () => {
-    await api("PATCH", `/api/events/${eventId}`, payload);
+    const saved = await api("PATCH", `/api/events/${eventId}`, payload);
+    if (saved.warnings && saved.warnings.length) {
+      showToast("Já existe um evento com este nome e data.");
+    }
   });
 }
 

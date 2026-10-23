@@ -5,13 +5,11 @@ const {
   athleteOptionLabel,
   athleteLabelIndex,
   naipeLabel,
-  mixedRankingLabel,
   paginationInfo,
   buildAthleteQuery,
   importResultSummary,
   distinctCategories,
   nextHeatOrder,
-  bateriaLabel,
   gestaoErrorMessage,
 } = require("../static/gestao_logic.js");
 
@@ -109,15 +107,6 @@ test("nextHeatOrder sugere a proxima ordem dentro da prova", () => {
   assert.equal(nextHeatOrder([{ order_num: 5 }]), 6);
 });
 
-test("bateriaLabel inclui ordem e nome", () => {
-  assert.equal(
-    bateriaLabel({ order_num: 2, name: "Bateria 2" }),
-    "Bateria 2 · Bateria 2"
-  );
-  assert.equal(bateriaLabel({ order_num: 1 }), "Bateria 1");
-  assert.equal(bateriaLabel(null), "Bateria");
-});
-
 test("gestaoErrorMessage traduz codigos conhecidos", () => {
   assert.match(
     gestaoErrorMessage({ message: "order_num_duplicado" }),
@@ -148,10 +137,6 @@ test("gestaoErrorMessage traduz codigos de bateria", () => {
 
 test("naipeLabel reconhece prova mista", () => {
   assert.equal(naipeLabel("MISTO"), "Misto");
-  assert.equal(mixedRankingLabel("overall"), "Geral");
-  assert.equal(mixedRankingLabel("by_naipe"), "Por naipe");
-  assert.equal(mixedRankingLabel("both"), "Geral + por naipe");
-  assert.equal(mixedRankingLabel(undefined), "Geral + por naipe");
 });
 
 test("gestaoErrorMessage traduz erros de inscricao e override", () => {

@@ -34,6 +34,7 @@ REASON_DQ = "dq"
 REASON_DQ_UNDO = "dq_undo"
 REASON_RESET_FINISH = "reset_finish"
 REASON_UNDO_FINISH = "undo_finish"
+REASON_GROUP_CHANGE = "correcao_grupo"
 
 
 def canonical_json(payload: dict) -> str:
@@ -133,6 +134,11 @@ async def _snapshot_payload(session: AsyncSession, heat: Heat) -> dict:
             "name": heat.name,
             "order_num": heat.order_num,
             "heat_type": heat.heat_type,
+            "stroke": heat.stroke,
+            "naipe": heat.naipe,
+            "category": heat.category,
+            "classify_alone": bool(heat.classify_alone),
+            "lane_count": heat.lane_count,
             "distance_m": heat.distance_m,
             "duration_s": heat.duration_s,
             "status": heat.status,
@@ -151,6 +157,7 @@ async def record_revision(
     status: str,
     role: str,
     ip: str | None = None,
+    lock: bool = True,
 ) -> ResultSnapshot:
     """Adiciona e comita uma revisao ao final da cadeia do evento.
 
@@ -161,7 +168,13 @@ async def record_revision(
     undo_finish (os tres ultimos sao conectados pelo fluxo de correcoes).
     """
     await session.flush()
-    async with _heat_guard(f"event:{heat.event_id}"):
+    if lock:
+        guard = _heat_guard(f"event:{heat.event_id}")
+    else:
+        from contextlib import nullcontext
+
+        guard = nullcontext()
+    async with guard:
         payload = await _snapshot_payload(session, heat)
 
         result = await session.execute(

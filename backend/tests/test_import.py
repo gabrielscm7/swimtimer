@@ -53,7 +53,7 @@ async def test_import_csv_creates_athletes_and_teams(client):
     by_name = {item["name"]: item for item in listing["items"]}
     assert by_name["Ana Souza"]["team_name"] == "Leões"
     assert by_name["Duda"]["team_id"] is None
-    assert by_name["Ana Souza"]["category"] == "SUB-12"
+    assert by_name["Ana Souza"]["category"] == "livre"
 
 
 @pytest.mark.asyncio
@@ -238,7 +238,7 @@ async def test_export_round_trip(client):
         event["id"],
         name="Ana",
         naipe="F",
-        category="SUB-12",
+        category="mirim",
         team_id=team["id"],
     )
 
@@ -246,7 +246,7 @@ async def test_export_round_trip(client):
     assert response.status_code == 200
     text = response.text.lstrip("\ufeff")
     assert "NOME,EQUIPE,NAIPE,CATEGORIA" in text
-    assert "Ana,Leões,F,SUB-12" in text
+    assert "Ana,Leões,F,mirim" in text
 
 
 @pytest.mark.asyncio

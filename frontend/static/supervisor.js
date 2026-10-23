@@ -229,10 +229,10 @@ function modeScheduled(heat) {
       ? `<button class="sup-btn sup-btn-green sup-btn-start" data-act="start">🚀 INICIAR PROVA</button>`
       : `<button class="sup-btn sup-btn-blue" data-act="open-ready-check">▶ ABRIR READY CHECK</button>`;
   return `
-    <div class="sup-card">
+    <div class="sup-card level-card bateria">
       <h2>Próxima bateria</h2>
-      ${provaOf(heat) ? `<div class="muted" style="margin-bottom:2px">${escapeHtml(provaOf(heat).name)}</div>` : ""}
-      <div style="font-size:1.2rem;font-weight:700">${escapeHtml(heat.name)}</div>
+      ${provaOf(heat) ? `<div class="muted" style="margin-bottom:2px">${escapeHtml(Labels.provaLabel(provaOf(heat)))}</div>` : ""}
+      <div style="font-size:1.2rem;font-weight:700">${escapeHtml(Labels.bateriaLabel(heat, { includeProva: !provaOf(heat) }))}</div>
       <div class="muted" style="margin-top:4px">${heatTypeLabel(heat)}</div>
       <div class="muted" style="margin-top:4px">${pluralize(lanes.length, "participante")} em ${pluralize(lanes.length, "raia")}</div>
     </div>
@@ -270,8 +270,9 @@ function modeReady(heat) {
     ? `Aguardando: ${pending.map((lane) => `Raia ${lane.lane_number}`).join(", ")}`
     : "";
   return `
-    <div class="sup-card">
+    <div class="sup-card level-card bateria">
       <h2>Verificação de fiscais</h2>
+      <div class="muted" style="margin-bottom:2px">${escapeHtml(Labels.bateriaLabel(heat))}</div>
       <div class="muted" style="margin-bottom:8px">Aguardando confirmação</div>
       ${lines || '<p class="muted">Nenhuma raia configurada.</p>'}
       <div class="muted" style="margin-top:8px">${ready.size} de ${lanes.length} confirmados</div>
@@ -313,9 +314,10 @@ function modeActive(heat) {
     )
     .join("");
   return `
-    <div class="sup-card">
+    <div class="sup-card level-card bateria">
       <h2>Em andamento</h2>
-      <div style="font-size:1.25rem;font-weight:700">${escapeHtml(heat.name)}</div>
+      ${provaOf(heat) ? `<div class="muted" style="margin-bottom:2px">${escapeHtml(Labels.provaLabel(provaOf(heat)))}</div>` : ""}
+      <div style="font-size:1.25rem;font-weight:700">${escapeHtml(Labels.bateriaLabel(heat, { includeProva: !provaOf(heat) }))}</div>
       <div class="sup-clock" id="sup-clock">00:00.0</div>
     </div>
     <div class="sup-card">
@@ -372,8 +374,10 @@ function modeFinished(heat) {
     : "Sem revisão";
   const homologated = snapshot && snapshot.status === "official";
   return `
-    <div class="sup-card">
+    <div class="sup-card level-card bateria">
       <h2>🏁 Bateria encerrada</h2>
+      ${provaOf(heat) ? `<div class="muted" style="margin-bottom:2px">${escapeHtml(Labels.provaLabel(provaOf(heat)))}</div>` : ""}
+      <div style="font-weight:700;margin-bottom:8px">${escapeHtml(Labels.bateriaLabel(heat, { includeProva: !provaOf(heat) }))}</div>
       <table class="sup-table">
         <thead><tr><th>Pos</th><th>Nome</th><th>Equipe</th><th>Tempo</th><th>Velocidade</th></tr></thead>
         <tbody>${rows || '<tr><td colspan="5" class="muted">Sem participantes.</td></tr>'}</tbody>
@@ -419,7 +423,7 @@ function modeEventEnded() {
         heat.heat_type === "maratona"
           ? `${winner.laps} voltas`
           : winner.race_time_display || formatTime(winner.race_time_ms);
-      return `<div class="sup-lane-mini"><span class="spacer">${heat.order_num}. ${escapeHtml(heat.name)}</span><span>${escapeHtml(winner.participant_name || "—")} · ${result}</span></div>`;
+      return `<div class="sup-lane-mini"><span class="spacer">${escapeHtml(Labels.bateriaLabel(heat))}</span><span>${escapeHtml(winner.participant_name || "—")} · ${result}</span></div>`;
     })
     .join("");
   return `
@@ -455,7 +459,7 @@ function renderRight() {
       return `
         <div class="sup-prova-group">
           <div class="sup-prova-head">
-            <span>${prova.order_num}. ${escapeHtml(prova.name)}</span>
+            <span><span class="level-chip prova"><span class="level-icon">◆</span>PROVA</span> ${escapeHtml(Labels.provaLabel(prova))}</span>
             <span class="status-pill ${prova.status}">${statusLabel(prova.status)}</span>
             <span class="status-pill">${pluralize(provaHeats.length, "bateria")}</span>
           </div>
@@ -510,8 +514,8 @@ function heatCard(heat) {
   return `
     <div class="sup-heat-card ${activeClass} ${expanded ? "" : "collapsed"}" data-heat-card="${heat.id}">
       <div class="sup-heat-header" data-heat="${heat.id}">
-        <span>${heat.order_num}. ${escapeHtml(heat.name)}
-          ${provaOf(heat) ? `<span class="muted"> · ${escapeHtml(provaOf(heat).name)}</span>` : ""}
+        <span><span class="level-chip bateria"><span class="level-icon">▸</span>BATERIA</span> ${escapeHtml(Labels.bateriaLabel(heat))}
+          ${provaOf(heat) ? `<span class="muted"> · ${escapeHtml(Labels.provaLabel(provaOf(heat)))}</span>` : ""}
         </span>
         <span class="spacer"></span>
         <span class="status-pill ${heat.status}">${statusLabel(heat.status)}</span>
@@ -612,7 +616,11 @@ async function finishHeat(heatId) {
 async function homologateHeat() {
   const heat = currentHeat();
   if (!heat) return;
-  if (!window.confirm(`Homologar o resultado de ${heat.name}?`)) return;
+  if (
+    !window.confirm(
+      `Homologar o resultado de ${Labels.bateriaLabel(heat)}?`
+    )
+  ) return;
   const result = await api("POST", `/api/heats/${heat.id}/homologate`);
   applyHeatPayload(result);
   renderAll();
@@ -714,12 +722,12 @@ const ws = new WSClient(wsUrl(), (message) => {
         event_id: message.payload.event_id,
         name: message.payload.name,
         order_num: message.payload.order_num,
+        format: message.payload.format,
         stroke: message.payload.stroke,
         distance_m: message.payload.distance_m,
         naipe: message.payload.naipe,
         mixed_ranking: message.payload.mixed_ranking,
         category: message.payload.category,
-        consolidate_results: message.payload.consolidate_results,
         classification_criterion: message.payload.classification_criterion,
         status: message.payload.status,
       };

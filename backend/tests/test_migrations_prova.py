@@ -60,7 +60,7 @@ def test_upgrade_creates_prova_per_legacy_heat(tmp_path, monkeypatch):
 
     command.upgrade(config, "0002_lap_unique")
     _seed_legacy(db)
-    command.upgrade(config, "head")
+    command.upgrade(config, "0014_prova_format_definition")
 
     con = sqlite3.connect(db)
     con.execute("PRAGMA foreign_keys=ON")
@@ -128,7 +128,7 @@ def test_downgrade_restores_heat_order_and_data(tmp_path, monkeypatch):
 
     command.upgrade(config, "0002_lap_unique")
     _seed_legacy(db)
-    command.upgrade(config, "head")
+    command.upgrade(config, "0014_prova_format_definition")
     command.downgrade(config, "0002_lap_unique")
 
     con = sqlite3.connect(db)
@@ -153,7 +153,7 @@ def test_fresh_db_upgrade_creates_prova_schema(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "DATABASE_URL", f"sqlite+aiosqlite:///{db}")
     config = _alembic_config()
 
-    command.upgrade(config, "head")
+    command.upgrade(config, "0014_prova_format_definition")
 
     con = sqlite3.connect(db)
     tables = {

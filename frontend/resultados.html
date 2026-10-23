@@ -85,6 +85,13 @@
       .res-main {
         min-width: 0;
       }
+      .res-card.level-card.prova {
+        border-left: 6px solid var(--lvl-prova);
+      }
+      .res-card.level-card.bateria,
+      .res-heat.level-card.bateria {
+        border-left: 2px solid var(--lvl-bateria);
+      }
       .res-card {
         background: var(--panel);
         border: 1px solid var(--border);
@@ -340,6 +347,7 @@
       </div>
     </main>
 
+    <script src="/static/common/labels.js"></script>
     <script type="module" src="/static/results.js"></script>
   </body>
 </html>
