@@ -23,3 +23,26 @@ async def _heat_guard(heat_id: str):
     lock = await _get_heat_lock(heat_id)
     async with lock:
         yield
+
+
+# Locks por evento: serializam mudanças de tema e limpeza de imagens, evitando
+# que saves concorrentes apaguem arquivos ainda referenciados por outra
+# requisição. Mesma premissa de um único worker uvicorn dos locks de bateria.
+_theme_locks: dict[str, asyncio.Lock] = {}
+_theme_locks_guard = asyncio.Lock()
+
+
+async def _get_theme_lock(event_id: str) -> asyncio.Lock:
+    async with _theme_locks_guard:
+        lock = _theme_locks.get(event_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            _theme_locks[event_id] = lock
+        return lock
+
+
+@asynccontextmanager
+async def _theme_guard(event_id: str):
+    lock = await _get_theme_lock(event_id)
+    async with lock:
+        yield

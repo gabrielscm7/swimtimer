@@ -142,6 +142,16 @@
       "Outra importação ocorreu ao mesmo tempo. Tente novamente.",
     distance_m_obrigatorio: "Informe a distância da bateria.",
     duration_s_obrigatorio: "Informe a duração da maratona.",
+    contraste_insuficiente:
+      "Contraste abaixo de 3:1 entre texto, destaques e fundo/painel. Ajuste as cores antes de salvar.",
+    imagem_muito_grande:
+      "Imagem muito grande: use no máximo 3840 px em cada lado.",
+    imagem_formato_invalido:
+      "Formato de imagem inválido: use PNG, JPG ou WebP.",
+    url_tema_invalida:
+      "A imagem referenciada não pertence a este evento. Envie a imagem novamente.",
+    imagem_tema_ausente:
+      "A imagem referenciada não existe mais. Envie-a novamente antes de salvar.",
   };
 
   function gestaoErrorMessage(error) {

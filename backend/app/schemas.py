@@ -1,3 +1,4 @@
+import re
 from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -91,6 +92,60 @@ class EventUpdate(BaseModel):
     def _validate_pool(cls, value: int | None) -> int | None:
         if value is not None and value not in (25, 50):
             raise ValueError("pool_length_m deve ser 25 ou 50")
+        return value
+
+
+class EventTheme(BaseModel):
+    """Tema do front publico. Ausente no JSON = usa o padrao do sistema."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    bg: str = "#0f1117"
+    bg2: str = "#14161f"
+    panel: str = "#1a1d27"
+    text: str = "#e8eaf0"
+    muted: str = "#6b7280"
+    accent: str = "#00d4ff"
+    accent_strong: str = "#00b0d6"
+    bg_image_url: Optional[str] = None
+    bg_opacity: float = Field(default=1.0, ge=0, le=1)
+    bg_fit: Literal["cover", "contain", "center"] = "cover"
+    bg_position: str = Field(default="center", min_length=1, max_length=40)
+    logo_url: Optional[str] = None
+    title_override: Optional[str] = Field(default=None, max_length=200)
+    footer_text: Optional[str] = Field(default=None, max_length=300)
+    show_team_logos: bool = True
+    font_scale: float = Field(default=1.0, ge=0.8, le=1.4)
+
+    @field_validator(
+        "bg",
+        "bg2",
+        "panel",
+        "text",
+        "muted",
+        "accent",
+        "accent_strong",
+    )
+    @classmethod
+    def _validate_color(cls, value: str) -> str:
+        if not re.fullmatch(r"#[0-9a-fA-F]{6}", value or ""):
+            raise ValueError("cor_invalida")
+        return value.lower()
+
+    @field_validator("bg_image_url", "logo_url")
+    @classmethod
+    def _validate_theme_url(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if not re.fullmatch(r"/theme/[A-Za-z0-9._-]+", value):
+            raise ValueError("url_invalida")
+        return value
+
+    @field_validator("bg_position")
+    @classmethod
+    def _validate_position(cls, value: str) -> str:
+        if not re.fullmatch(r"[A-Za-z0-9% .-]{1,40}", value or ""):
+            raise ValueError("posicao_invalida")
         return value
 
 

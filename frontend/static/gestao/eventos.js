@@ -123,6 +123,7 @@ function renderSettings() {
       <button class="primary" data-action="save-settings">Salvar privacidade</button>
       <div class="field-error" id="set-public-error" hidden></div>
     </div>
+    <div class="panel" id="appearance-panel"></div>
     <div class="panel">
       <h2>Zona de perigo</h2>
       <button class="danger" data-action="delete-event" ${state.eventData.status === "draft" ? "" : "disabled"}>🗑 Excluir evento</button>

@@ -7,6 +7,12 @@
     <title>SwimTimer — Público</title>
     <link rel="stylesheet" href="/static/style.css" />
     <style>
+      :root {
+        --pub-font-scale: 1;
+        --podium-gold: #facc15;
+        --podium-silver: #cbd5e1;
+        --podium-bronze: #d97706;
+      }
       html,
       body {
         height: 100%;
@@ -14,10 +20,30 @@
       body {
         overflow: hidden;
         cursor: default;
+        background: radial-gradient(
+          circle at top,
+          var(--bg-2) 0%,
+          var(--bg) 60%
+        );
+      }
+      #pub-bg {
+        position: fixed;
+        inset: 0;
+        z-index: 0;
+        pointer-events: none;
+        background-color: transparent;
+        background-image: var(--pub-bg-image, none);
+        background-repeat: no-repeat;
+        background-position: var(--pub-bg-position, center);
+        background-size: var(--pub-bg-size, cover);
+        opacity: var(--pub-bg-opacity, 1);
       }
       #pub-stage {
+        position: relative;
+        z-index: 1;
         height: 100vh;
         width: 100vw;
+        background: transparent;
         padding: clamp(16px, 2.5vw, 44px);
         display: flex;
         flex-direction: column;
@@ -27,6 +53,13 @@
       }
       #pub-stage.pub-select {
         overflow: auto;
+      }
+      .pub-event-logo {
+        display: block;
+        max-height: clamp(64px, 12vh, 160px);
+        max-width: min(80vw, 560px);
+        object-fit: contain;
+        margin: 0 auto clamp(12px, 2vh, 30px);
       }
       .pub-center {
         flex: 1;
@@ -40,18 +73,18 @@
         text-transform: uppercase;
         letter-spacing: 3px;
         color: var(--muted);
-        font-size: clamp(14px, 1.4vw, 22px);
+        font-size: calc(clamp(14px, 1.4vw, 22px) * var(--pub-font-scale));
         margin-bottom: 10px;
       }
       .pub-event-title {
-        font-size: clamp(40px, 6vw, 96px);
+        font-size: calc(clamp(40px, 6vw, 96px) * var(--pub-font-scale));
         font-weight: 800;
         margin: 0 0 10px;
         color: var(--text);
       }
       .pub-subtitle {
         color: var(--muted);
-        font-size: clamp(18px, 2vw, 32px);
+        font-size: calc(clamp(18px, 2vw, 32px) * var(--pub-font-scale));
         margin-bottom: 34px;
       }
       .pub-upcoming {
@@ -66,7 +99,7 @@
         align-items: baseline;
         gap: 16px;
         padding: 10px 0;
-        font-size: clamp(20px, 2.2vw, 34px);
+        font-size: calc(clamp(20px, 2.2vw, 34px) * var(--pub-font-scale));
         border-bottom: 1px solid var(--border);
         text-align: left;
       }
@@ -81,7 +114,7 @@
       .pub-waiting {
         margin-top: 34px;
         color: var(--muted);
-        font-size: clamp(18px, 1.8vw, 28px);
+        font-size: calc(clamp(18px, 1.8vw, 28px) * var(--pub-font-scale));
         display: flex;
         align-items: center;
         gap: 12px;
@@ -100,18 +133,18 @@
       }
       .pub-top-event {
         color: var(--muted);
-        font-size: clamp(16px, 1.6vw, 26px);
+        font-size: calc(clamp(16px, 1.6vw, 26px) * var(--pub-font-scale));
         margin-bottom: 6px;
       }
       .pub-heat-name {
-        font-size: clamp(28px, 3.5vw, 52px);
+        font-size: calc(clamp(28px, 3.5vw, 52px) * var(--pub-font-scale));
         font-weight: 800;
         color: var(--text);
         line-height: 1.1;
       }
       .pub-heat-type {
         color: var(--cyan);
-        font-size: clamp(18px, 2vw, 30px);
+        font-size: calc(clamp(18px, 2vw, 30px) * var(--pub-font-scale));
         margin-top: 8px;
       }
       .pub-lane-grid {
@@ -131,23 +164,23 @@
       .pub-lane-num {
         color: var(--cyan);
         font-weight: 800;
-        font-size: clamp(16px, 1.5vw, 24px);
+        font-size: calc(clamp(16px, 1.5vw, 24px) * var(--pub-font-scale));
         letter-spacing: 1px;
       }
       .pub-lane-name {
-        font-size: clamp(22px, 2.4vw, 40px);
+        font-size: calc(clamp(22px, 2.4vw, 40px) * var(--pub-font-scale));
         font-weight: 700;
         margin-top: 6px;
       }
       .pub-lane-team {
         color: var(--muted);
-        font-size: clamp(16px, 1.6vw, 26px);
+        font-size: calc(clamp(16px, 1.6vw, 26px) * var(--pub-font-scale));
         margin-top: 2px;
       }
       .pub-footer {
         text-align: center;
         color: var(--muted);
-        font-size: clamp(18px, 1.8vw, 30px);
+        font-size: calc(clamp(18px, 1.8vw, 30px) * var(--pub-font-scale));
         padding: 18px 0;
       }
       .pub-racing-top {
@@ -160,7 +193,7 @@
         margin-bottom: clamp(10px, 1vw, 20px);
       }
       .pub-racing-meta .pub-heat-name {
-        font-size: clamp(24px, 2.8vw, 40px);
+        font-size: calc(clamp(24px, 2.8vw, 40px) * var(--pub-font-scale));
       }
       .pub-racing-clock {
         text-align: right;
@@ -169,7 +202,7 @@
       .pub-clock {
         font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
         font-variant-numeric: tabular-nums;
-        font-size: clamp(40px, 5vw, 72px);
+        font-size: calc(clamp(40px, 5vw, 72px) * var(--pub-font-scale));
         font-weight: 700;
         color: var(--cyan);
         line-height: 1;
@@ -194,7 +227,7 @@
         color: var(--muted);
         text-transform: uppercase;
         letter-spacing: 2px;
-        font-size: clamp(12px, 1vw, 18px);
+        font-size: calc(clamp(12px, 1vw, 18px) * var(--pub-font-scale));
         border-bottom: 2px solid var(--border);
       }
       .pub-trow {
@@ -209,38 +242,38 @@
         grid-template-columns: clamp(50px, 5vw, 70px) 1fr clamp(80px, 7vw, 120px) clamp(90px, 8vw, 140px) clamp(90px, 8vw, 140px);
       }
       .pub-pos {
-        font-size: clamp(24px, 3vw, 44px);
+        font-size: calc(clamp(24px, 3vw, 44px) * var(--pub-font-scale));
         font-weight: 800;
         color: var(--muted);
         text-align: center;
       }
       .pub-pos.gold {
-        color: #facc15;
+        color: var(--podium-gold);
       }
       .pub-pos.silver {
-        color: #cbd5e1;
+        color: var(--podium-silver);
       }
       .pub-pos.bronze {
-        color: #d97706;
+        color: var(--podium-bronze);
       }
       .pub-name {
-        font-size: clamp(20px, 2.5vw, 36px);
+        font-size: calc(clamp(20px, 2.5vw, 36px) * var(--pub-font-scale));
         font-weight: 700;
       }
       .pub-team {
-        font-size: clamp(16px, 2vw, 28px);
+        font-size: calc(clamp(16px, 2vw, 28px) * var(--pub-font-scale));
         color: var(--muted);
       }
       .pub-time {
         font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
         font-variant-numeric: tabular-nums;
-        font-size: clamp(24px, 3vw, 44px);
+        font-size: calc(clamp(24px, 3vw, 44px) * var(--pub-font-scale));
         font-weight: 700;
         color: var(--text);
         text-align: right;
       }
       .pub-speed {
-        font-size: clamp(16px, 2vw, 28px);
+        font-size: calc(clamp(16px, 2vw, 28px) * var(--pub-font-scale));
         color: var(--muted);
         text-align: right;
       }
@@ -266,7 +299,7 @@
         display: inline-block;
         background: var(--red);
         color: #fff;
-        font-size: clamp(14px, 1.4vw, 22px);
+        font-size: calc(clamp(14px, 1.4vw, 22px) * var(--pub-font-scale));
         font-weight: 800;
         padding: 2px 12px;
         border-radius: 999px;
@@ -297,21 +330,21 @@
         border-color: #d97706;
       }
       .pub-podium-medal {
-        font-size: clamp(28px, 3vw, 48px);
+        font-size: calc(clamp(28px, 3vw, 48px) * var(--pub-font-scale));
       }
       .pub-podium-name {
-        font-size: clamp(20px, 2.4vw, 38px);
+        font-size: calc(clamp(20px, 2.4vw, 38px) * var(--pub-font-scale));
         font-weight: 800;
         margin-top: 6px;
       }
       .pub-podium-team {
         color: var(--muted);
-        font-size: clamp(16px, 1.6vw, 26px);
+        font-size: calc(clamp(16px, 1.6vw, 26px) * var(--pub-font-scale));
       }
       .pub-podium-result {
         font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
         color: var(--cyan);
-        font-size: clamp(24px, 2.6vw, 42px);
+        font-size: calc(clamp(24px, 2.6vw, 42px) * var(--pub-font-scale));
         font-weight: 700;
         margin-top: 8px;
       }
@@ -349,14 +382,14 @@
         padding: clamp(18px, 2vw, 28px);
         margin-bottom: 14px;
         color: var(--text);
-        font-size: clamp(20px, 2.2vw, 32px);
+        font-size: calc(clamp(20px, 2.2vw, 32px) * var(--pub-font-scale));
         font-weight: 700;
         text-align: left;
       }
       .pub-select-card small {
         display: block;
         color: var(--muted);
-        font-size: clamp(14px, 1.4vw, 20px);
+        font-size: calc(clamp(14px, 1.4vw, 20px) * var(--pub-font-scale));
         font-weight: 400;
         margin-top: 6px;
       }
@@ -427,6 +460,7 @@
     </style>
   </head>
   <body>
+    <div id="pub-bg"></div>
     <main id="pub-stage"></main>
     <div class="pub-qr" id="pub-qr" hidden></div>
     <div class="pub-overlay" id="pub-overlay" hidden>
@@ -438,6 +472,7 @@
     <script src="/static/clock_logic.js"></script>
     <script src="/static/sequence_logic.js"></script>
     <script src="/static/results_logic.js"></script>
+    <script src="/static/theme_logic.js"></script>
     <script type="module" src="/static/publico.js"></script>
   </body>
 </html>

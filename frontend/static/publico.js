@@ -18,15 +18,18 @@ const {
   provaHeaderLabel,
 } = window.SequenceLogic;
 const { displayName } = window.ResultsLogic;
+const { normalizeTheme, pickReadableColor } = window.ThemeLogic;
 
 const RESULT_MS = 20000;
 const PROVA_RESULT_MS = 30000;
 
 const params = new URLSearchParams(window.location.search);
 const eventId = params.get("event");
+const preview = params.get("preview") === "1";
 
 const els = {
   stage: document.getElementById("pub-stage"),
+  bg: document.getElementById("pub-bg"),
   overlay: document.getElementById("pub-overlay"),
   dot: document.getElementById("pub-dot"),
   fullscreen: document.getElementById("pub-fullscreen"),
@@ -34,6 +37,7 @@ const els = {
 };
 
 let eventData = null;
+let theme = normalizeTheme(null);
 let events = [];
 let state = 0; // 0 seleção, 1 aguardando, 2 ready, 3 prova, 4 resultado, 5 intervalo, 6 encerrado
 let currentHeatId = null;
@@ -68,7 +72,7 @@ function pubName(name) {
 
 function updateQr() {
   if (!els.qr) return;
-  if (!eventData || eventData.public_results_enabled === false) {
+  if (preview || !eventData || eventData.public_results_enabled === false) {
     els.qr.hidden = true;
     return;
   }
@@ -104,10 +108,85 @@ function provasSorted() {
 }
 
 function logoImg(url, name) {
-  if (!url) return "";
+  if (!url || !theme.show_team_logos) return "";
   return `<img class="team-logo small" src="${escapeHtml(url)}" alt="${escapeHtml(
     name || "Logo"
   )}" loading="lazy" />`;
+}
+
+function eventTitle() {
+  return theme.title_override || (eventData ? eventData.name : "SwimTimer");
+}
+
+function eventLogo() {
+  if (!theme.logo_url) return "";
+  return `<img class="pub-event-logo" src="${escapeHtml(
+    theme.logo_url
+  )}" alt="${escapeHtml(eventTitle())}" />`;
+}
+
+function footer(fallback = "") {
+  const text = theme.footer_text || fallback;
+  if (!text) return "";
+  return `<div class="pub-footer">${escapeHtml(text)}</div>`;
+}
+
+function applyTheme(raw) {
+  theme = normalizeTheme(raw);
+  const root = document.documentElement;
+  root.style.setProperty("--bg", theme.bg);
+  root.style.setProperty("--bg-2", theme.bg2);
+  root.style.setProperty("--panel", theme.panel);
+  root.style.setProperty("--panel-2", theme.panel);
+  root.style.setProperty("--row-bg", theme.bg2);
+  root.style.setProperty("--input-bg", theme.bg2);
+  root.style.setProperty("--cyan", theme.accent);
+  root.style.setProperty("--cyan-strong", theme.accent_strong);
+  root.style.setProperty("--text", theme.text);
+  root.style.setProperty("--muted", theme.muted);
+  root.style.setProperty("--pub-font-scale", String(theme.font_scale));
+  const podiumBackgrounds = [theme.panel, theme.bg];
+  root.style.setProperty(
+    "--podium-gold",
+    pickReadableColor(["#facc15", "#6b5200"], podiumBackgrounds)
+  );
+  root.style.setProperty(
+    "--podium-silver",
+    pickReadableColor(["#cbd5e1", "#475569"], podiumBackgrounds)
+  );
+  root.style.setProperty(
+    "--podium-bronze",
+    pickReadableColor(["#d97706", "#9a3412"], podiumBackgrounds)
+  );
+  if (els.bg) {
+    els.bg.style.setProperty(
+      "--pub-bg-image",
+      theme.bg_image_url ? `url("${theme.bg_image_url}")` : "none"
+    );
+    els.bg.style.setProperty("--pub-bg-opacity", String(theme.bg_opacity));
+    const size =
+      theme.bg_fit === "contain"
+        ? "contain"
+        : theme.bg_fit === "center"
+          ? "auto"
+          : "cover";
+    els.bg.style.setProperty("--pub-bg-size", size);
+    els.bg.style.setProperty(
+      "--pub-bg-position",
+      theme.bg_position || "center"
+    );
+  }
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.setAttribute("content", theme.bg);
+}
+
+async function loadTheme() {
+  if (!eventId) return;
+  try {
+    applyTheme(await api("GET", `/api/events/${eventId}/theme`));
+  } catch (error) {
+    /* mantém o tema atual; o próximo reconnect tenta novamente */
+  }
 }
 
 function classificationRows(standings, excluded) {
@@ -335,13 +414,15 @@ function viewWaiting() {
     .join("");
   return `
     <div class="pub-center">
-      <h1 class="pub-event-title">${escapeHtml(eventData.name)}</h1>
+      ${eventLogo()}
+      <h1 class="pub-event-title">${escapeHtml(eventTitle())}</h1>
       <div class="pub-subtitle">${escapeHtml(subtitle())}</div>
       <div class="pub-upcoming">
         <div class="pub-label">A seguir</div>
-        ${upcoming || '<div class="muted" style="font-size:clamp(18px,2vw,30px);padding:12px">Nenhuma bateria agendada</div>'}
+        ${upcoming || '<div class="muted" style="font-size:calc(clamp(18px,2vw,30px) * var(--pub-font-scale));padding:12px">Nenhuma bateria agendada</div>'}
       </div>
       <div class="pub-waiting"><span class="dot online"></span> Aguardando início</div>
+      ${footer()}
     </div>`;
 }
 
@@ -359,14 +440,15 @@ function viewReady() {
     )
     .join("");
   return `
-    <div class="pub-top-event">${escapeHtml(eventData.name)}</div>
+    <div class="pub-top-event">${escapeHtml(eventTitle())}</div>
     <div class="pub-center">
+      ${eventLogo()}
       <div class="pub-label">A seguir</div>
       <div class="pub-heat-name">${escapeHtml(provaHeaderLabel(heat))}</div>
       <div class="pub-heat-type">${heatTypeLabel(heat)}</div>
       <div class="pub-lane-grid">${cards || '<div class="muted">Sem participantes</div>'}</div>
     </div>
-    <div class="pub-footer">Aguardando disparo...</div>`;
+    ${footer("Aguardando disparo...")}`;
 }
 
 function viewRacing() {
@@ -375,11 +457,11 @@ function viewRacing() {
   const battery = heat.heat_type === "bateria";
   const clock = battery
     ? `<div class="pub-clock" id="pub-clock">00:00.0</div>`
-    : `<div class="pub-clock" id="pub-clock">${formatClock(marathonRemaining(heat))}</div><div class="muted" style="font-size:clamp(14px,1.4vw,22px)">restante</div>`;
+    : `<div class="pub-clock" id="pub-clock">${formatClock(marathonRemaining(heat))}</div><div class="muted" style="font-size:calc(clamp(14px,1.4vw,22px) * var(--pub-font-scale))">restante</div>`;
   return `
     <div class="pub-racing-top">
       <div class="pub-racing-meta">
-        <div class="muted" style="font-size:clamp(14px,1.4vw,22px)">${escapeHtml(eventData.name)}</div>
+        <div class="muted" style="font-size:calc(clamp(14px,1.4vw,22px) * var(--pub-font-scale))">${escapeHtml(eventTitle())}</div>
         <div class="pub-heat-name">${escapeHtml(provaHeaderLabel(heat))}</div>
         <div class="pub-heat-type">${heatTypeLabel(heat)}</div>
       </div>
@@ -569,13 +651,16 @@ function viewInterval() {
   const partial =
     prova && prova.consolidate_results ? classifications[prova.id] : null;
   return `
-    <div class="pub-interval">
-      <div class="pub-interval-col">
-        <div class="pub-label">Resultado — ${heat ? escapeHtml(provaHeaderLabel(heat)) : ""}</div>
-        ${heat ? compactTable(heat) : ""}
-        ${partial ? classificationTable(partial) : ""}
+    <div style="display:flex;flex-direction:column;height:100%">
+      <div class="pub-interval">
+        <div class="pub-interval-col">
+          <div class="pub-label">Resultado — ${heat ? escapeHtml(provaHeaderLabel(heat)) : ""}</div>
+          ${heat ? compactTable(heat) : ""}
+          ${partial ? classificationTable(partial) : ""}
+        </div>
+        <div class="pub-interval-col">${eventLogo()}${nextInfo}</div>
       </div>
-      <div class="pub-interval-col">${nextInfo}</div>
+      ${footer()}
     </div>`;
 }
 
@@ -621,14 +706,14 @@ function viewEnded() {
             .map(
               (heat) => `
               <div class="pub-end-group">
-                <div class="pub-heat-name" style="font-size:clamp(18px,2vw,30px)">Bateria ${heat.heat_index_in_prova ?? heat.order_num} · ${escapeHtml(heat.name)}</div>
+                <div class="pub-heat-name" style="font-size:calc(clamp(18px,2vw,30px) * var(--pub-font-scale))">Bateria ${heat.heat_index_in_prova ?? heat.order_num} · ${escapeHtml(heat.name)}</div>
                 ${compactTable(heat)}
               </div>`
             )
             .join("");
       return `
         <div class="pub-end-group">
-          <div class="pub-heat-name" style="font-size:clamp(20px,2.2vw,34px)">${prova.order_num}. ${escapeHtml(prova.name)}</div>
+          <div class="pub-heat-name" style="font-size:calc(clamp(20px,2.2vw,34px) * var(--pub-font-scale))">${prova.order_num}. ${escapeHtml(prova.name)}</div>
           ${body}
         </div>`;
     })
@@ -636,11 +721,13 @@ function viewEnded() {
   return `
     <div class="pub-center" style="justify-content:flex-start;padding-top:16px">
       <div class="pub-label" style="color:var(--cyan)">🏆 Evento encerrado</div>
-      <h1 class="pub-event-title">${escapeHtml(eventData.name)}</h1>
+      ${eventLogo()}
+      <h1 class="pub-event-title">${escapeHtml(eventTitle())}</h1>
       <div class="pub-subtitle">${escapeHtml(subtitle())}</div>
       <div style="width:100%;max-width:1100px;text-align:left;overflow:auto;flex:1">
         ${groups || '<div class="pub-subtitle">Nenhuma bateria finalizada.</div>'}
       </div>
+      ${footer()}
     </div>`;
 }
 
@@ -689,6 +776,7 @@ async function refreshClassifications() {
 async function refreshEvent() {
   try {
     eventData = await api("GET", `/api/events/${eventId}`);
+    await loadTheme();
     updateQr();
     await refreshClassifications();
     reconcile();
@@ -773,6 +861,11 @@ const ws = new WSClient(wsUrl(), (message) => {
         if (state === 4 || state === 6) renderState(false);
       })
       .catch(() => {});
+  } else if (message.type === "theme_updated") {
+    if (eventId && (!message.event_id || message.event_id === eventId)) {
+      applyTheme(message.payload);
+      renderState(false);
+    }
   } else if (message.type === "settings_updated") {
     if (eventData) {
       eventData.public_results_enabled =
@@ -807,6 +900,13 @@ document.addEventListener("fullscreenchange", () => {
   els.fullscreen.textContent = document.fullscreenElement ? "🗗" : "⛶";
 });
 
+window.addEventListener("message", (event) => {
+  if (event.origin !== window.location.origin) return;
+  if (!event.data || event.data.type !== "theme_preview") return;
+  applyTheme(event.data.theme);
+  if (eventData) renderState(false);
+});
+
 async function loadSelection() {
   els.overlay.hidden = true;
   if (els.qr) els.qr.hidden = true;
@@ -824,13 +924,14 @@ async function init() {
     await loadSelection();
     return;
   }
-  els.overlay.hidden = false;
+  els.overlay.hidden = preview;
   try {
     eventData = await api("GET", `/api/events/${eventId}`);
   } catch (error) {
     window.location.replace("publico.html");
     return;
   }
+  await loadTheme();
   updateQr();
   await refreshClassifications();
   reconcile();

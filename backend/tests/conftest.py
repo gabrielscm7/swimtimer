@@ -10,6 +10,9 @@ os.environ.setdefault("DATABASE_URL", f"sqlite+aiosqlite:///{_DB_PATH}")
 _LOGO_DIR = tempfile.mkdtemp(prefix="swimtimer_logos_")
 os.environ.setdefault("LOGO_DIR", _LOGO_DIR)
 
+_THEME_DIR = tempfile.mkdtemp(prefix="swimtimer_theme_")
+os.environ.setdefault("THEME_DIR", _THEME_DIR)
+
 _DATA_DIR = tempfile.mkdtemp(prefix="swimtimer_data_")
 os.environ.setdefault("JOURNAL_DIR", os.path.join(_DATA_DIR, "journal"))
 os.environ.setdefault("BACKUP_DIR", os.path.join(_DATA_DIR, "backups"))
@@ -22,6 +25,7 @@ def _cleanup_test_db() -> None:
     except OSError:
         pass
     shutil.rmtree(_LOGO_DIR, ignore_errors=True)
+    shutil.rmtree(_THEME_DIR, ignore_errors=True)
     shutil.rmtree(_DATA_DIR, ignore_errors=True)
 
 

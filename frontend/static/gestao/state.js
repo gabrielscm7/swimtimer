@@ -24,6 +24,9 @@ export const els = {
 
 export const state = {
   eventData: null,
+  theme: null,
+  themeForm: null,
+  themeDirty: false,
   activeSection: "overview",
   expanded: new Set(),
   expandedProvas: new Set(),

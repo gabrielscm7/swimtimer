@@ -35,6 +35,7 @@ class Event(Base):
     public_name_mode: Mapped[str] = mapped_column(
         String, default="full", nullable=False, server_default=text("'full'")
     )
+    theme_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[float] = mapped_column(Float, nullable=False)
 
     teams: Mapped[list["Team"]] = relationship(

@@ -47,6 +47,7 @@ async def main() -> None:
         f"sqlite+aiosqlite:///{os.path.join(tmp, 'rehearsal.db')}"
     )
     os.environ["LOGO_DIR"] = os.path.join(tmp, "logos")
+    os.environ["THEME_DIR"] = os.path.join(tmp, "theme")
     os.environ.pop("OPERATOR_PIN", None)
 
     backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

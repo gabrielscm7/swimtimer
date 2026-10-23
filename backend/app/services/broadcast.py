@@ -50,6 +50,19 @@ def _settings_updated_message(event_id: str, payload: dict) -> dict:
     }
 
 
+def _theme_updated_message(event_id: str, theme: dict) -> dict:
+    return {
+        "type": "theme_updated",
+        "scope": "event",
+        "event_id": event_id,
+        "payload": theme,
+    }
+
+
+async def _broadcast_theme(event_id: str, theme: dict) -> None:
+    await manager.broadcast(_theme_updated_message(event_id, theme))
+
+
 async def _broadcast_settings(event) -> None:
     await manager.broadcast(
         _settings_updated_message(

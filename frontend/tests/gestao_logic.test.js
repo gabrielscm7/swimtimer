@@ -187,6 +187,29 @@ test("gestaoErrorMessage traduz erros de inscricao e override", () => {
   );
 });
 
+test("gestaoErrorMessage traduz erros de tema", () => {
+  assert.match(
+    gestaoErrorMessage({ message: "contraste_insuficiente" }),
+    /3:1/
+  );
+  assert.match(
+    gestaoErrorMessage({ message: "imagem_muito_grande" }),
+    /3840 px/
+  );
+  assert.match(
+    gestaoErrorMessage({ message: "imagem_formato_invalido" }),
+    /PNG, JPG ou WebP/
+  );
+  assert.match(
+    gestaoErrorMessage({ message: "url_tema_invalida" }),
+    /não pertence a este evento/
+  );
+  assert.match(
+    gestaoErrorMessage({ message: "imagem_tema_ausente" }),
+    /não existe mais/
+  );
+});
+
 test("athleteOptionLabel inclui codigo de registro quando existir", () => {
   assert.equal(
     athleteOptionLabel({

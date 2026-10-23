@@ -24,6 +24,7 @@ from .services.backup import backup_service
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings.logo_dir.mkdir(parents=True, exist_ok=True)
+    settings.theme_dir.mkdir(parents=True, exist_ok=True)
     await init_db()
     await backup_service.start()
     try:
@@ -59,10 +60,16 @@ app.include_router(ws.router)
 # Frontend estático (montado por último para não capturar /api e /ws)
 # --------------------------------------------------------------------------- #
 settings.logo_dir.mkdir(parents=True, exist_ok=True)
+settings.theme_dir.mkdir(parents=True, exist_ok=True)
 app.mount(
     "/logos",
     StaticFiles(directory=str(settings.logo_dir)),
     name="logos",
+)
+app.mount(
+    "/theme",
+    StaticFiles(directory=str(settings.theme_dir)),
+    name="theme",
 )
 
 _frontend_dir = settings.frontend_dir

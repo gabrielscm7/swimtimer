@@ -40,6 +40,7 @@ async def main() -> None:
     db = os.path.join(tmp, "load.db")
     os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{db}"
     os.environ["LOGO_DIR"] = os.path.join(tmp, "logos")
+    os.environ["THEME_DIR"] = os.path.join(tmp, "theme")
 
     backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if backend_dir not in sys.path:

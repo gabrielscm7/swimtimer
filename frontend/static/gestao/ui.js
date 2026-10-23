@@ -3,20 +3,30 @@ import { showFeedback, showToast, statusLabel } from "../common/ui.js";
 import { els, state } from "./state.js";
 
 let _loadEventHandler = null;
+let _discardHandler = null;
 const _renderers = [];
 
 export function setLoadEventHandler(handler) {
   _loadEventHandler = handler;
 }
 
+export function setDiscardHandler(handler) {
+  _discardHandler = handler;
+}
+
 export function registerRenderer(renderer) {
   _renderers.push(renderer);
+}
+
+function discardChanges() {
+  setDirty(false);
+  if (typeof _discardHandler === "function") _discardHandler();
 }
 
 export async function refresh() {
   try {
     await _loadEventHandler();
-    setDirty(false);
+    setDirty(Boolean(state.themeDirty));
   } catch (error) {
     showToast(GestaoLogic.gestaoErrorMessage(error), true);
   }
@@ -139,10 +149,11 @@ function teamOptions(selectedId) {
 
 function switchSection(section) {
   if (section === state.activeSection) return;
-  if (state.dirty && !window.confirm("Há alterações não salvas. Sair mesmo assim?")) {
+  const pending = state.dirty || state.themeDirty;
+  if (pending && !window.confirm("Há alterações não salvas. Sair mesmo assim?")) {
     return;
   }
-  setDirty(false);
+  if (pending) discardChanges();
   state.activeSection = section;
   for (const name of ["overview", "heats", "teams", "athletes", "settings"]) {
     els[name].hidden = name !== section;
@@ -153,10 +164,11 @@ function switchSection(section) {
 
 
 function openSection(section, callback) {
-  if (state.dirty && !window.confirm("Há alterações não salvas. Sair mesmo assim?")) {
+  const pending = state.dirty || state.themeDirty;
+  if (pending && !window.confirm("Há alterações não salvas. Sair mesmo assim?")) {
     return false;
   }
-  setDirty(false);
+  if (pending) discardChanges();
   state.activeSection = section;
   for (const name of ["overview", "heats", "teams", "athletes", "settings"]) {
     els[name].hidden = name !== section;

@@ -24,6 +24,7 @@ import {
   renderSettings,
   saveSettings,
 } from "./eventos.js";
+import { renderAppearance } from "./aparencia.js";
 import {
   deleteProva,
   loadClassification,
@@ -40,23 +41,35 @@ import {
   renderAll,
   renderSidebar,
   setDirty,
+  setDiscardHandler,
   setLoadEventHandler,
   switchSection,
 } from "./ui.js";
 
 async function loadEvent() {
   state.eventData = await api("GET", `/api/events/${eventId}`);
+  const theme = await api("GET", `/api/events/${eventId}/theme`);
+  state.theme = window.ThemeLogic.normalizeTheme(theme);
+  if (!state.themeForm || !state.themeDirty) {
+    state.themeForm = { ...state.theme };
+  }
   await loadAthleteData();
   renderAll();
 }
 
 setLoadEventHandler(loadEvent);
+setDiscardHandler(() => {
+  state.themeDirty = false;
+  state.themeForm = state.theme ? { ...state.theme } : null;
+  renderAppearance();
+});
 registerRenderer(renderSidebar);
 registerRenderer(renderOverview);
 registerRenderer(renderHeats);
 registerRenderer(renderTeams);
 registerRenderer(renderAthletes);
 registerRenderer(renderSettings);
+registerRenderer(renderAppearance);
 
 
 els.main.addEventListener("click", (event) => {
@@ -195,6 +208,7 @@ els.main.addEventListener("click", (event) => {
 
 els.main.addEventListener("input", (event) => {
   if (event.target.closest("[data-athlete-filter]")) return;
+  if (event.target.closest("[data-theme-upload]")) return;
   setDirty(true);
 });
 
@@ -215,7 +229,6 @@ els.eventName.addEventListener("change", async () => {
   }
   try {
     await api("PATCH", `/api/events/${eventId}`, { name });
-    setDirty(false);
     await refresh();
     showToast("Nome atualizado");
   } catch (error) {
@@ -264,6 +277,13 @@ const ws = new WSClient(wsUrl(), (message) => {
       !state.provaForm
     ) {
       renderHeats();
+    }
+  } else if (message.type === "theme_updated") {
+    if (message.event_id && message.event_id !== eventId) return;
+    state.theme = window.ThemeLogic.normalizeTheme(message.payload);
+    if (!state.themeDirty) {
+      state.themeForm = { ...state.theme };
+      if (state.activeSection === "settings") renderAppearance();
     }
   } else if (message.type === "error") {
     showToast(message.message || "Erro na operação", true);

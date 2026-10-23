@@ -30,7 +30,10 @@ class Settings(BaseSettings):
     PORT: int = 8080
     FRONTEND_DIR: str = ""
     LOGO_DIR: str = ""
+    THEME_DIR: str = ""
     MAX_LOGO_BYTES: int = 1_048_576
+    MAX_THEME_IMAGE_BYTES: int = 2_097_152
+    MAX_THEME_IMAGE_PX: int = 3840
     MAX_IMPORT_BYTES: int = 2_097_152
     MAX_IMPORT_ROWS: int = 1000
     MIN_LAP_INTERVAL_S: float = 5.0
@@ -69,6 +72,12 @@ class Settings(BaseSettings):
         if self.LOGO_DIR:
             return Path(self.LOGO_DIR)
         return BACKEND_DIR / "data" / "logos"
+
+    @property
+    def theme_dir(self) -> Path:
+        if self.THEME_DIR:
+            return Path(self.THEME_DIR)
+        return BACKEND_DIR / "data" / "theme"
 
 
 settings = Settings()
