@@ -117,12 +117,12 @@ def test_ws_action_error_keeps_connection(ws_client):
 
 
 def test_ws_internal_error_keeps_connection(ws_client, monkeypatch):
-    import app.main as main_module
+    from app.services import lane_actions
 
     async def _boom(session, lane_id, **kwargs):
         raise RuntimeError("falha simulada")
 
-    monkeypatch.setattr(main_module, "_do_finish", _boom)
+    monkeypatch.setattr(lane_actions, "_do_finish", _boom)
 
     with ws_client.websocket_connect("/ws") as websocket:
         _recv_of_type(websocket, "server_status")
