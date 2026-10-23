@@ -1,3 +1,14 @@
+import { api } from "./common/api.js";
+import {
+  escapeHtml,
+  formatClock,
+  formatTenths,
+  formatTime,
+} from "./common/format.js";
+import { heatTypeLabel } from "./common/ui.js";
+import { serverNow } from "./common/clock.js";
+import { WSClient, wsUrl } from "./common/ws.js";
+
 const RESULT_MS = 20000;
 
 const params = new URLSearchParams(window.location.search);

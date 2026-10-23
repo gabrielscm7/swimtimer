@@ -1,3 +1,20 @@
+import { api } from "./common/api.js";
+import {
+  escapeHtml,
+  formatClock,
+  formatDuration,
+  formatTenths,
+  formatTime,
+} from "./common/format.js";
+import {
+  heatTypeLabel,
+  pluralize,
+  showToast,
+  statusLabel,
+} from "./common/ui.js";
+import { serverNow } from "./common/clock.js";
+import { WSClient, wsUrl } from "./common/ws.js";
+
 const params = new URLSearchParams(window.location.search);
 const eventId = params.get("event");
 if (!eventId) {

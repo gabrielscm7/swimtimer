@@ -1,3 +1,9 @@
+import { api } from "./common/api.js";
+import { escapeHtml, formatTenths, formatTime } from "./common/format.js";
+import { heatTypeLabel, showToast } from "./common/ui.js";
+import { serverNow } from "./common/clock.js";
+import { WSClient, wsUrl } from "./common/ws.js";
+
 const STORAGE_KEY = "swimtimer_fiscal";
 const OUTBOX_KEY = "swimtimer_fiscal_outbox";
 const REJECTED_KEY = "swimtimer_fiscal_rejeitados";

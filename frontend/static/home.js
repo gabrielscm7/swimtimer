@@ -1,3 +1,9 @@
+import { api } from "./common/api.js";
+import { escapeHtml, formatClock, formatTenths } from "./common/format.js";
+import { pluralize, showToast, statusLabel } from "./common/ui.js";
+import { serverNow } from "./common/clock.js";
+import { WSClient, wsUrl } from "./common/ws.js";
+
 const els = {
   badge: document.getElementById("conn-badge"),
   dot: document.getElementById("server-dot"),
