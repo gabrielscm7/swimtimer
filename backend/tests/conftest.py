@@ -32,6 +32,7 @@ from sqlalchemy.ext.asyncio import (
 from sqlalchemy.pool import StaticPool
 
 import app.main as main_module
+from app import database as database_module
 from app.database import Base, get_db
 
 
@@ -55,16 +56,16 @@ async def client():
         async with session_factory() as session:
             yield session
 
-    original_factory = main_module.AsyncSessionLocal
+    original_factory = database_module.AsyncSessionLocal
     main_module.app.dependency_overrides[get_db] = override_get_db
-    main_module.AsyncSessionLocal = session_factory
+    database_module.AsyncSessionLocal = session_factory
     try:
         transport = ASGITransport(app=main_module.app)
         async with AsyncClient(transport=transport, base_url="http://test") as ac:
             yield ac
     finally:
         main_module.app.dependency_overrides.clear()
-        main_module.AsyncSessionLocal = original_factory
+        database_module.AsyncSessionLocal = original_factory
         await engine.dispose()
 
 

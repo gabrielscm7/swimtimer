@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import (
 )
 
 import app.main as main_module
+from app import database as database_module
 from app.database import Base, get_db
 from app.models import Heat, LapEvent
 
@@ -37,16 +38,16 @@ async def client(tmp_path):
         async with factory() as session:
             yield session
 
-    original = main_module.AsyncSessionLocal
+    original = database_module.AsyncSessionLocal
     main_module.app.dependency_overrides[get_db] = override_get_db
-    main_module.AsyncSessionLocal = factory
+    database_module.AsyncSessionLocal = factory
     try:
         transport = ASGITransport(app=main_module.app)
         async with AsyncClient(transport=transport, base_url="http://test") as ac:
             yield ac, factory
     finally:
         main_module.app.dependency_overrides.clear()
-        main_module.AsyncSessionLocal = original
+        database_module.AsyncSessionLocal = original
         await engine.dispose()
 
 

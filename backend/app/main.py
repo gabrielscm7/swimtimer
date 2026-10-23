@@ -1,12 +1,8 @@
-import asyncio
 import csv
 import io
-import json
-import math
 import time
 import uuid
 from contextlib import asynccontextmanager
-from pathlib import Path
 
 from fastapi import (
     Depends,
@@ -22,25 +18,22 @@ from fastapi import (
 )
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from openpyxl import Workbook, load_workbook
-from sqlalchemy import delete, func, or_, select, update
+from openpyxl import Workbook
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .classification import (
-    build_classification,
-    prova_status,
-)
+from . import database
 from .config import settings
-from .database import AsyncSessionLocal, engine, get_db, init_db
+from .core.errors import LaneActionError
+from .core.locks import _heat_guard
+from .database import engine, get_db, init_db
 from .models import (
-    ActionLog,
     Athlete,
     Event,
     Heat,
     HeatLane,
     LapEvent,
-    ProcessedOp,
     Prova,
     Team,
 )
@@ -63,166 +56,58 @@ from .schemas import (
     TeamCreate,
     TeamResponse,
     TeamUpdate,
-    compute_speed,
-    format_race_time,
     normalize_category,
     normalize_naipe,
 )
-from .ws_manager import ConnectionManager
+from .services.athlete_import import (
+    _IMPORT_COLUMNS,
+    _cell,
+    _detect_header,
+    _parse_csv_rows,
+    _parse_xlsx_rows,
+)
+from .services.broadcast import (
+    _active_heat_count,
+    _broadcast_heat,
+    _broadcast_ready,
+    _broadcast_server_status,
+    _heat_state_message,
+    _prova_state_message,
+    manager,
+)
+from .services.lane_actions import (
+    _anchor_heat,
+    _client_ip,
+    _do_finish,
+    _do_lap,
+    _drop_anchor,
+    _log_action,
+    _maybe_finish_heat,
+)
+from .services.lookups import (
+    _get_event,
+    _get_heat,
+    _get_lane,
+    _get_prova,
+    _validate_reorder_ids,
+)
+from .services.logos import _remove_logo_file, _sniff_image
+from .services.payloads import (
+    _classification_payload,
+    _event_payload,
+    _heat_lanes,
+    _heat_payload,
+    _lane_payload,
+    _participant_lanes,
+    _prova_heats,
+    _prova_payload,
+    _provas_payload,
+    _sync_prova_status,
+    _team_athlete_counts,
+    _team_dict,
+)
 
 START_TIME = time.time()
-manager = ConnectionManager()
-
-# Locks por prova: serializam as transições de estado de uma mesma bateria
-# (finish/lap/dq/undo/start/abort/finish) evitando corridas de escrita no
-# SQLite. O processo roda com um único worker uvicorn, então locks em memória
-# são suficientes; a constraint única em lap_event é a rede de segurança.
-_heat_locks: dict[str, asyncio.Lock] = {}
-_heat_locks_guard = asyncio.Lock()
-
-# Âncora monotônica por bateria: (monotonic_no_início, wall_no_início).
-# Usada para medir duração de toques sem client_ts, imune a ajustes de relógio.
-# Volátil por processo — após restart o cálculo cai para wall-clock.
-_mono_anchors: dict[str, tuple[float, float]] = {}
-
-
-def _anchor_heat(heat: Heat) -> None:
-    wall = heat.started_at if heat.started_at is not None else time.time()
-    _mono_anchors[heat.id] = (time.monotonic(), wall)
-
-
-def _drop_anchor(heat_id: str) -> None:
-    _mono_anchors.pop(heat_id, None)
-
-
-def _coerce_ts(value: object) -> float | None:
-    if value is None:
-        return None
-    try:
-        result = float(value)
-    except (TypeError, ValueError):
-        return None
-    return result if math.isfinite(result) else None
-
-
-def _effective_time(
-    heat: Heat, client_ts: float | None
-) -> tuple[float, float, bool, float]:
-    """Calcula (effective_ts, received_at, late, duração_da_prova).
-
-    - Com client_ts: usa o toque do fiscal, limitado a [started_at, agora].
-    - Sem client_ts: usa a âncora monotônica da bateria (se conhecida);
-      após restart, cai para o relógio de parede.
-    """
-    now = time.time()
-    started_at = heat.started_at if heat.started_at is not None else now
-    if client_ts is not None:
-        effective_ts = min(max(client_ts, started_at), now)
-        late = (now - effective_ts) > settings.LATE_AFTER_S
-        return effective_ts, now, late, max(0.0, effective_ts - started_at)
-
-    anchor = _mono_anchors.get(heat.id)
-    if anchor is not None:
-        mono_start, wall_start = anchor
-        elapsed = max(0.0, time.monotonic() - mono_start)
-        effective_ts = wall_start + elapsed
-        late = (now - effective_ts) > settings.LATE_AFTER_S
-        return effective_ts, now, late, elapsed
-
-    return now, now, False, max(0.0, now - started_at)
-
-
-def _quantize_race_time_ms(duration_s: float) -> int:
-    """Centésimos: piso para múltiplo de 10 ms, coerente com o display."""
-    ms = max(0, int(duration_s * 1000))
-    return ms - (ms % 10)
-
-
-def _client_ip(request: Request | None) -> str | None:
-    if request is None or request.client is None:
-        return None
-    return request.client.host
-
-
-async def _cached_op_result(
-    session: AsyncSession, op_id: str | None
-) -> dict | None:
-    if not op_id:
-        return None
-    row = await session.get(ProcessedOp, op_id)
-    if row is None:
-        return None
-    try:
-        return json.loads(row.result_json)
-    except (TypeError, ValueError):
-        return None
-
-
-def _remember_op(
-    session: AsyncSession,
-    *,
-    op_id: str | None,
-    lane_id: str | None,
-    action: str,
-    result: dict,
-) -> None:
-    if not op_id:
-        return
-    session.add(
-        ProcessedOp(
-            op_id=op_id,
-            lane_id=lane_id,
-            action=action,
-            result_json=json.dumps(result, default=str),
-            created_at=time.time(),
-        )
-    )
-
-
-def _log_action(
-    session: AsyncSession,
-    *,
-    action: str,
-    received_at: float,
-    effective_ts: float,
-    event_id: str | None = None,
-    heat_id: str | None = None,
-    lane_id: str | None = None,
-    op_id: str | None = None,
-    source_ip: str | None = None,
-    payload: dict | None = None,
-) -> None:
-    session.add(
-        ActionLog(
-            received_at=received_at,
-            effective_ts=effective_ts,
-            event_id=event_id,
-            heat_id=heat_id,
-            lane_id=lane_id,
-            action=action,
-            op_id=op_id,
-            source_ip=source_ip,
-            payload_json=(
-                json.dumps(payload, default=str) if payload is not None else None
-            ),
-        )
-    )
-
-
-async def _get_heat_lock(heat_id: str) -> asyncio.Lock:
-    async with _heat_locks_guard:
-        lock = _heat_locks.get(heat_id)
-        if lock is None:
-            lock = asyncio.Lock()
-            _heat_locks[heat_id] = lock
-        return lock
-
-
-@asynccontextmanager
-async def _heat_guard(heat_id: str):
-    lock = await _get_heat_lock(heat_id)
-    async with lock:
-        yield
 
 
 @asynccontextmanager
@@ -242,542 +127,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-# --------------------------------------------------------------------------- #
-# Helpers
-# --------------------------------------------------------------------------- #
-async def _get_event(session: AsyncSession, event_id: str) -> Event:
-    event = await session.get(Event, event_id)
-    if event is None:
-        raise HTTPException(status_code=404, detail="evento_nao_encontrado")
-    return event
-
-
-async def _get_heat(session: AsyncSession, heat_id: str) -> Heat:
-    heat = await session.get(Heat, heat_id)
-    if heat is None:
-        raise HTTPException(status_code=404, detail="prova_nao_encontrada")
-    return heat
-
-
-async def _get_prova(session: AsyncSession, prova_id: str) -> Prova:
-    prova = await session.get(Prova, prova_id)
-    if prova is None:
-        raise HTTPException(status_code=404, detail="prova_nao_encontrada")
-    return prova
-
-
-async def _get_lane(session: AsyncSession, lane_id: str) -> HeatLane:
-    lane = await session.get(HeatLane, lane_id)
-    if lane is None:
-        raise HTTPException(status_code=404, detail="raia_nao_encontrada")
-    return lane
-
-
-async def _team_map(session: AsyncSession, event_id: str) -> dict[str, dict]:
-    result = await session.execute(select(Team).where(Team.event_id == event_id))
-    return {
-        team.id: {"name": team.name, "logo_url": team.logo_url}
-        for team in result.scalars().all()
-    }
-
-
-async def _team_athlete_counts(
-    session: AsyncSession, event_id: str
-) -> dict[str, int]:
-    result = await session.execute(
-        select(Athlete.team_id, func.count(Athlete.id))
-        .where(Athlete.event_id == event_id, Athlete.team_id.is_not(None))
-        .group_by(Athlete.team_id)
-    )
-    return {team_id: count for team_id, count in result.all()}
-
-
-def _team_dict(team: Team, athlete_count: int = 0) -> dict:
-    return {
-        "id": team.id,
-        "event_id": team.event_id,
-        "name": team.name,
-        "logo_url": team.logo_url,
-        "athlete_count": athlete_count,
-    }
-
-
-def _lane_dict(
-    lane: HeatLane,
-    *,
-    heat: Heat,
-    pool_length_m: int,
-    team_name: str | None,
-    team_logo_url: str | None = None,
-    athlete: Athlete | None = None,
-    laps: int = 0,
-    last_lap_at: float | None = None,
-) -> dict:
-    return {
-        "id": lane.id,
-        "heat_id": lane.heat_id,
-        "lane_number": lane.lane_number,
-        "participant_name": athlete.name if athlete else lane.participant_name,
-        "athlete_id": lane.athlete_id,
-        "naipe": athlete.naipe if athlete else None,
-        "category": athlete.category if athlete else None,
-        "team_id": lane.team_id,
-        "team": team_name,
-        "team_logo_url": team_logo_url,
-        "status": lane.status,
-        "finish_at": lane.finish_at,
-        "race_time_ms": lane.race_time_ms,
-        "received_at": lane.received_at,
-        "late": bool(lane.late),
-        "race_time_display": format_race_time(lane.race_time_ms),
-        "speed_ms": compute_speed(heat.distance_m, lane.race_time_ms),
-        "laps": laps,
-        "meters": laps * pool_length_m,
-        "last_lap_at": last_lap_at,
-    }
-
-
-async def _lane_payload(
-    session: AsyncSession, lane: HeatLane, heat: Heat
-) -> dict:
-    event = await session.get(Event, heat.event_id)
-    athlete = (
-        await session.get(Athlete, lane.athlete_id)
-        if lane.athlete_id
-        else None
-    )
-    team = await session.get(Team, lane.team_id) if lane.team_id else None
-    return _lane_dict(
-        lane,
-        heat=heat,
-        pool_length_m=event.pool_length_m if event else 0,
-        team_name=team.name if team else None,
-        team_logo_url=team.logo_url if team else None,
-        athlete=athlete,
-    )
-
-
-async def _heats_payload(
-    session: AsyncSession, heats: list[Heat]
-) -> list[dict]:
-    """Carrega raias, voltas e equipes de varias baterias em lote."""
-    if not heats:
-        return []
-
-    event_ids = {heat.event_id for heat in heats}
-    result = await session.execute(
-        select(Event).where(Event.id.in_(event_ids))
-    )
-    events = {event.id: event for event in result.scalars().all()}
-
-    result = await session.execute(
-        select(Team).where(Team.event_id.in_(event_ids))
-    )
-    teams_by_event: dict[str, dict[str, dict]] = {}
-    for team in result.scalars().all():
-        teams_by_event.setdefault(team.event_id, {})[team.id] = {
-            "name": team.name,
-            "logo_url": team.logo_url,
-        }
-
-    heat_ids = [heat.id for heat in heats]
-    result = await session.execute(
-        select(HeatLane)
-        .where(HeatLane.heat_id.in_(heat_ids))
-        .order_by(HeatLane.heat_id, HeatLane.lane_number)
-    )
-    lanes_by_heat: dict[str, list[HeatLane]] = {}
-    lane_ids: list[str] = []
-    for lane in result.scalars().all():
-        lanes_by_heat.setdefault(lane.heat_id, []).append(lane)
-        lane_ids.append(lane.id)
-
-    athlete_ids = {
-        lane.athlete_id
-        for lanes in lanes_by_heat.values()
-        for lane in lanes
-        if lane.athlete_id
-    }
-    athletes_by_id: dict[str, Athlete] = {}
-    if athlete_ids:
-        result = await session.execute(
-            select(Athlete).where(Athlete.id.in_(athlete_ids))
-        )
-        athletes_by_id = {item.id: item for item in result.scalars().all()}
-
-    lap_counts: dict[str, int] = {}
-    last_laps: dict[str, float] = {}
-    if lane_ids:
-        rows = await session.execute(
-            select(
-                LapEvent.lane_id,
-                func.count(LapEvent.id),
-                func.max(LapEvent.recorded_at),
-            )
-            .where(LapEvent.lane_id.in_(lane_ids), LapEvent.is_undo.is_(False))
-            .group_by(LapEvent.lane_id)
-        )
-        for lane_id, count, last in rows.all():
-            lap_counts[lane_id] = count
-            if last is not None:
-                last_laps[lane_id] = last
-
-    payloads: list[dict] = []
-    for heat in heats:
-        event = events.get(heat.event_id)
-        pool_length_m = event.pool_length_m if event else 0
-        team_map = teams_by_event.get(heat.event_id, {})
-        lanes = lanes_by_heat.get(heat.id, [])
-        payloads.append(
-            {
-                "id": heat.id,
-                "event_id": heat.event_id,
-                "prova_id": heat.prova_id,
-                "name": heat.name,
-                "order_num": heat.order_num,
-                "heat_type": heat.heat_type,
-                "distance_m": heat.distance_m,
-                "duration_s": heat.duration_s,
-                "status": heat.status,
-                "started_at": heat.started_at,
-                "finished_at": heat.finished_at,
-                "heat_lanes": [
-                    _lane_dict(
-                        lane,
-                        heat=heat,
-                        pool_length_m=pool_length_m,
-                        team_name=(team_map.get(lane.team_id) or {}).get("name")
-                        if lane.team_id
-                        else None,
-                        team_logo_url=(
-                            team_map.get(lane.team_id) or {}
-                        ).get("logo_url")
-                        if lane.team_id
-                        else None,
-                        athlete=athletes_by_id.get(lane.athlete_id)
-                        if lane.athlete_id
-                        else None,
-                        laps=lap_counts.get(lane.id, 0),
-                        last_lap_at=last_laps.get(lane.id),
-                    )
-                    for lane in lanes
-                ],
-            }
-        )
-    return payloads
-
-
-async def _heat_payload(session: AsyncSession, heat: Heat) -> dict:
-    payloads = await _heats_payload(session, [heat])
-    return payloads[0]
-
-
-async def _prova_heats(session: AsyncSession, prova_id: str) -> list[Heat]:
-    result = await session.execute(
-        select(Heat)
-        .where(Heat.prova_id == prova_id)
-        .order_by(Heat.order_num)
-    )
-    return list(result.scalars().all())
-
-
-async def _provas_payload(
-    session: AsyncSession,
-    provas: list[Prova],
-    *,
-    include_heats: bool = True,
-) -> list[dict]:
-    if not provas:
-        return []
-    event_id = provas[0].event_id
-    result = await session.execute(
-        select(Heat)
-        .where(Heat.event_id == event_id)
-        .order_by(Heat.order_num)
-    )
-    heats = list(result.scalars().all())
-    heat_payloads = await _heats_payload(session, heats) if include_heats else []
-    payload_by_heat = {payload["id"]: payload for payload in heat_payloads}
-    heats_by_prova: dict[str, list[Heat]] = {}
-    for heat in heats:
-        heats_by_prova.setdefault(heat.prova_id, []).append(heat)
-
-    payloads = []
-    for prova in provas:
-        prova_heats = sorted(
-            heats_by_prova.get(prova.id, []),
-            key=lambda heat: heat.order_num,
-        )
-        payloads.append(
-            {
-                "id": prova.id,
-                "event_id": prova.event_id,
-                "name": prova.name,
-                "order_num": prova.order_num,
-                "stroke": prova.stroke,
-                "distance_m": prova.distance_m,
-                "category": prova.category,
-                "naipe": prova.naipe,
-                "consolidate_results": prova.consolidate_results,
-                "classification_criterion": prova.classification_criterion,
-                "status": prova_status([heat.status for heat in prova_heats]),
-                "created_at": prova.created_at,
-                "heat_count": len(prova_heats),
-                "heat_orders": [heat.order_num for heat in prova_heats],
-                "heats": [
-                    payload_by_heat[heat.id]
-                    for heat in prova_heats
-                    if heat.id in payload_by_heat
-                ],
-            }
-        )
-    return payloads
-
-
-async def _prova_payload(
-    session: AsyncSession, prova: Prova, *, include_heats: bool = True
-) -> dict:
-    payloads = await _provas_payload(
-        session, [prova], include_heats=include_heats
-    )
-    return payloads[0]
-
-
-async def _classification_payload(
-    session: AsyncSession, prova: Prova
-) -> dict:
-    heats = await _prova_heats(session, prova.id)
-    heat_ids = [heat.id for heat in heats]
-    lane_map: dict[str, list[HeatLane]] = {heat_id: [] for heat_id in heat_ids}
-    if heat_ids:
-        result = await session.execute(
-            select(HeatLane)
-            .where(HeatLane.heat_id.in_(heat_ids))
-            .order_by(HeatLane.lane_number)
-        )
-        for lane in result.scalars().all():
-            lane_map[lane.heat_id].append(lane)
-
-    event = await session.get(Event, prova.event_id)
-    team_map = await _team_map(session, prova.event_id)
-    heat_dicts = [
-        {
-            "id": heat.id,
-            "name": heat.name,
-            "order_num": heat.order_num,
-            "status": heat.status,
-            "distance_m": heat.distance_m,
-            "lanes": [
-                {
-                    "id": lane.id,
-                    "lane_number": lane.lane_number,
-                    "participant_name": lane.participant_name,
-                    "team_id": lane.team_id,
-                    "status": lane.status,
-                    "race_time_ms": lane.race_time_ms,
-                }
-                for lane in lane_map.get(heat.id, [])
-            ],
-        }
-        for heat in heats
-    ]
-    classification = build_classification(
-        consolidate_results=prova.consolidate_results,
-        heats=heat_dicts,
-        team_map=team_map,
-        pool_distance_m=event.pool_length_m if event else None,
-    )
-    return {
-        "prova_id": prova.id,
-        "name": prova.name,
-        "naipe": prova.naipe,
-        "category": prova.category,
-        "status": classification["status"],
-        "consolidate_results": prova.consolidate_results,
-        "classification_criterion": prova.classification_criterion,
-        "is_provisional": classification["is_provisional"],
-        "standings": classification["standings"],
-        "excluded": classification["excluded"],
-        "battery_results": classification["battery_results"],
-    }
-
-
-async def _sync_prova_status(session: AsyncSession, prova_id: str) -> None:
-    prova = await session.get(Prova, prova_id)
-    if prova is None:
-        return
-    result = await session.execute(
-        select(Heat.status).where(Heat.prova_id == prova_id)
-    )
-    prova.status = prova_status(list(result.scalars().all()))
-
-
-async def _event_payload(
-    session: AsyncSession, event: Event, *, include_teams: bool = False
-) -> dict:
-    result = await session.execute(
-        select(Heat)
-        .join(Prova, Heat.prova_id == Prova.id)
-        .where(Heat.event_id == event.id)
-        .order_by(Prova.order_num, Heat.order_num)
-    )
-    heats = result.scalars().all()
-    result = await session.execute(
-        select(Prova)
-        .where(Prova.event_id == event.id)
-        .order_by(Prova.order_num)
-    )
-    provas = result.scalars().all()
-    payload = {
-        "id": event.id,
-        "name": event.name,
-        "location": event.location,
-        "date": event.date,
-        "pool_length_m": event.pool_length_m,
-        "status": event.status,
-        "created_at": event.created_at,
-        "provas": [
-            {
-                "id": prova.id,
-                "event_id": prova.event_id,
-                "name": prova.name,
-                "order_num": prova.order_num,
-                "stroke": prova.stroke,
-                "distance_m": prova.distance_m,
-                "category": prova.category,
-                "naipe": prova.naipe,
-                "consolidate_results": prova.consolidate_results,
-                "classification_criterion": prova.classification_criterion,
-                "status": prova.status,
-                "heat_count": sum(
-                    1 for heat in heats if heat.prova_id == prova.id
-                ),
-            }
-            for prova in provas
-        ],
-        "heats": await _heats_payload(session, heats),
-    }
-    if include_teams:
-        result = await session.execute(
-            select(Team).where(Team.event_id == event.id).order_by(Team.name)
-        )
-        counts = await _team_athlete_counts(session, event.id)
-        payload["teams"] = [
-            _team_dict(team, counts.get(team.id, 0))
-            for team in result.scalars().all()
-        ]
-    return payload
-
-
-def _participant_lanes(lanes: list[HeatLane]) -> list[HeatLane]:
-    return [
-        lane
-        for lane in lanes
-        if lane.participant_name or lane.athlete_id or lane.team_id
-    ]
-
-
-async def _heat_lanes(session: AsyncSession, heat_id: str) -> list[HeatLane]:
-    result = await session.execute(
-        select(HeatLane)
-        .where(HeatLane.heat_id == heat_id)
-        .order_by(HeatLane.lane_number)
-    )
-    return list(result.scalars().all())
-
-
-def _ready_payload(lanes: list[HeatLane]) -> dict:
-    participants = _participant_lanes(lanes)
-    ready = [lane.lane_number for lane in participants if lane.status == "ready"]
-    pending = [lane.lane_number for lane in participants if lane.status != "ready"]
-    return {
-        "lanes_ready": ready,
-        "lanes_pending": pending,
-        "all_ready": bool(participants) and not pending,
-    }
-
-
-def _heat_state_message(heat_payload: dict) -> dict:
-    return {
-        "type": "heat_state",
-        "scope": "heat",
-        "heat_id": heat_payload["id"],
-        "payload": heat_payload,
-    }
-
-
-def _ready_update_message(heat_id: str, ready_payload: dict) -> dict:
-    return {
-        "type": "ready_update",
-        "scope": "heat",
-        "heat_id": heat_id,
-        "payload": ready_payload,
-    }
-
-
-def _prova_state_message(prova_payload: dict) -> dict:
-    return {
-        "type": "prova_state",
-        "scope": "prova",
-        "prova_id": prova_payload["id"],
-        "payload": prova_payload,
-    }
-
-
-async def _active_heat_count(session: AsyncSession) -> int:
-    result = await session.execute(
-        select(func.count())
-        .select_from(Heat)
-        .where(Heat.status == "active")
-    )
-    return int(result.scalar_one())
-
-
-async def _server_status_message(session: AsyncSession) -> dict:
-    return {
-        "type": "server_status",
-        "scope": "home",
-        "payload": {
-            "connected": manager.count,
-            "active_heats": await _active_heat_count(session),
-        },
-    }
-
-
-async def _broadcast_server_status() -> None:
-    async with AsyncSessionLocal() as session:
-        await manager.broadcast(await _server_status_message(session))
-
-
-async def _broadcast_heat(session: AsyncSession, heat: Heat) -> None:
-    await manager.broadcast(_heat_state_message(await _heat_payload(session, heat)))
-    prova = await session.get(Prova, heat.prova_id)
-    if prova is not None:
-        await manager.broadcast(
-            _prova_state_message(await _prova_payload(session, prova))
-        )
-
-
-async def _broadcast_ready(session: AsyncSession, heat: Heat) -> None:
-    lanes = await _heat_lanes(session, heat.id)
-    await manager.broadcast(_ready_update_message(heat.id, _ready_payload(lanes)))
-
-
-async def _maybe_finish_heat(session: AsyncSession, heat: Heat) -> bool:
-    await session.flush()
-    lanes = await _heat_lanes(session, heat.id)
-    participants = _participant_lanes(lanes)
-    finished = False
-    if participants and all(
-        lane.status in ("finished", "dq") for lane in participants
-    ):
-        heat.status = "finished"
-        heat.finished_at = time.time()
-        finished = True
-    await _sync_prova_status(session, heat.prova_id)
-    return finished
 
 
 # --------------------------------------------------------------------------- #
@@ -940,40 +289,6 @@ async def update_team(
     return _team_dict(team, int(count or 0))
 
 
-def _sniff_image(data: bytes) -> tuple[str, str] | None:
-    if data.startswith(b"\x89PNG\r\n\x1a\n"):
-        return "png", "image/png"
-    if data.startswith(b"\xff\xd8\xff"):
-        return "jpg", "image/jpeg"
-    if (
-        len(data) >= 12
-        and data[:4] == b"RIFF"
-        and data[8:12] == b"WEBP"
-    ):
-        return "webp", "image/webp"
-    return None
-
-
-def _logo_path_from_url(url: str | None) -> Path | None:
-    if not url or not url.startswith("/logos/"):
-        return None
-    name = url[len("/logos/"):]
-    if "/" in name or "\\" in name or name in ("", ".", ".."):
-        return None
-    return settings.logo_dir / name
-
-
-def _remove_logo_file(url: str | None) -> None:
-    path = _logo_path_from_url(url)
-    if path is None:
-        return
-    try:
-        if path.parent == settings.logo_dir:
-            path.unlink(missing_ok=True)
-    except OSError:
-        pass
-
-
 @app.post("/api/teams/{team_id}/logo")
 async def upload_team_logo(
     team_id: str,
@@ -1076,12 +391,6 @@ async def _get_athlete(session: AsyncSession, athlete_id: str) -> Athlete:
     if athlete is None:
         raise HTTPException(status_code=404, detail="atleta_nao_encontrado")
     return athlete
-
-
-def _validate_reorder_ids(ids: list[str], known: set[str]) -> None:
-    """Exige o conjunto completo de IDs, sem duplicatas ou itens externos."""
-    if len(ids) != len(set(ids)) or set(ids) != known:
-        raise HTTPException(status_code=400, detail="ordem_ids_invalidos")
 
 
 async def _validate_athlete_team(
@@ -1301,64 +610,6 @@ async def delete_athlete(
 
 
 # ---------------- Importacao / exportacao de planilhas ---------------- #
-_IMPORT_COLUMNS = ("NOME", "EQUIPE", "NAIPE", "CATEGORIA")
-
-
-def _strip_accents(value: str) -> str:
-    import unicodedata
-
-    decomposed = unicodedata.normalize("NFKD", value)
-    return "".join(
-        char for char in decomposed if not unicodedata.combining(char)
-    )
-
-
-def _normalize_header(value: object) -> str:
-    if value is None:
-        return ""
-    return _strip_accents(str(value)).strip().upper()
-
-
-def _parse_csv_rows(data: bytes) -> list[list[object]]:
-    try:
-        text = data.decode("utf-8-sig")
-    except UnicodeDecodeError:
-        text = data.decode("latin-1")
-    try:
-        dialect = csv.Sniffer().sniff(text[:4096], delimiters=",;\t")
-    except csv.Error:
-        dialect = csv.excel
-    reader = csv.reader(io.StringIO(text), dialect)
-    return [row for row in reader]
-
-
-def _parse_xlsx_rows(data: bytes) -> list[list[object]]:
-    workbook = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
-    try:
-        sheet = workbook.active
-        if sheet is None:
-            return []
-        return [list(row) for row in sheet.iter_rows(values_only=True)]
-    finally:
-        workbook.close()
-
-
-def _detect_header(rows: list[list[object]]) -> tuple[int, dict[str, int]]:
-    for index, row in enumerate(rows[:20]):
-        headers = [_normalize_header(cell) for cell in row]
-        if "NOME" in headers:
-            return index, {
-                header: position
-                for position, header in enumerate(headers)
-                if header
-            }
-    raise HTTPException(status_code=400, detail="planilha_sem_cabecalho")
-
-
-def _cell(row: list[object], position: int | None) -> str:
-    if position is None or position >= len(row) or row[position] is None:
-        return ""
-    return str(row[position]).strip()
 
 
 @app.post(
@@ -2283,204 +1534,6 @@ async def lane_ready(
         return await _lane_payload(session, lane, heat)
 
 
-class LaneActionError(Exception):
-    def __init__(self, status_code: int, detail: str) -> None:
-        super().__init__(detail)
-        self.status_code = status_code
-        self.detail = detail
-
-
-async def _do_finish(
-    session: AsyncSession,
-    lane_id: str,
-    *,
-    op_id: str | None = None,
-    client_ts: float | None = None,
-    source_ip: str | None = None,
-) -> dict:
-    lane = await session.get(HeatLane, lane_id)
-    if lane is None:
-        raise LaneActionError(404, "raia_nao_encontrada")
-    heat_id = lane.heat_id
-
-    async with _heat_guard(heat_id):
-        session.expire_all()
-        lane = await session.get(HeatLane, lane_id)
-        if lane is None:
-            raise LaneActionError(404, "raia_nao_encontrada")
-        cached = await _cached_op_result(session, op_id)
-        if cached is not None:
-            return cached
-        heat = await session.get(Heat, heat_id)
-        if heat is None:
-            raise LaneActionError(404, "prova_nao_encontrada")
-        if heat.heat_type != "bateria":
-            raise LaneActionError(400, "nao_e_bateria")
-        if lane.finish_at is not None:
-            raise LaneActionError(409, "ja_finalizou")
-        if heat.status != "active":
-            raise LaneActionError(400, "prova_nao_ativa")
-        if heat.started_at is None:
-            raise LaneActionError(400, "prova_nao_iniciada")
-
-        effective_ts, received_at, late, duration_s = _effective_time(
-            heat, _coerce_ts(client_ts)
-        )
-        lane.finish_at = effective_ts
-        lane.race_time_ms = _quantize_race_time_ms(duration_s)
-        lane.received_at = received_at
-        lane.late = late
-        lane.status = "finished"
-        all_finished = await _maybe_finish_heat(session, heat)
-
-        team_name = None
-        if lane.team_id:
-            team = await session.get(Team, lane.team_id)
-            team_name = team.name if team else None
-
-        result = {
-            "lane_id": lane.id,
-            "lane_number": lane.lane_number,
-            "participant_name": lane.participant_name,
-            "team_name": team_name,
-            "race_time_ms": lane.race_time_ms,
-            "race_time_display": format_race_time(lane.race_time_ms),
-            "speed_ms": compute_speed(heat.distance_m, lane.race_time_ms) or 0.0,
-            "received_at": received_at,
-            "late": late,
-        }
-        _remember_op(
-            session,
-            op_id=op_id,
-            lane_id=lane.id,
-            action="finish",
-            result=result,
-        )
-        _log_action(
-            session,
-            action="finish",
-            received_at=received_at,
-            effective_ts=effective_ts,
-            event_id=heat.event_id,
-            heat_id=heat.id,
-            lane_id=lane.id,
-            op_id=op_id,
-            source_ip=source_ip,
-            payload={
-                "race_time_ms": result["race_time_ms"],
-                "late": late,
-            },
-        )
-        await session.commit()
-        await session.refresh(lane)
-
-        await _broadcast_heat(session, heat)
-        if all_finished:
-            await _broadcast_server_status()
-
-        return result
-
-
-async def _do_lap(
-    session: AsyncSession,
-    lane_id: str,
-    *,
-    op_id: str | None = None,
-    client_ts: float | None = None,
-    source_ip: str | None = None,
-) -> dict:
-    lane = await session.get(HeatLane, lane_id)
-    if lane is None:
-        raise LaneActionError(404, "raia_nao_encontrada")
-    heat_id = lane.heat_id
-
-    async with _heat_guard(heat_id):
-        session.expire_all()
-        lane = await session.get(HeatLane, lane_id)
-        if lane is None:
-            raise LaneActionError(404, "raia_nao_encontrada")
-        cached = await _cached_op_result(session, op_id)
-        if cached is not None:
-            return cached
-        heat = await session.get(Heat, heat_id)
-        if heat is None:
-            raise LaneActionError(404, "prova_nao_encontrada")
-        if heat.heat_type != "maratona":
-            raise LaneActionError(400, "nao_e_maratona")
-        if heat.status != "active":
-            raise LaneActionError(400, "prova_nao_ativa")
-
-        effective_ts, received_at, late, _duration_s = _effective_time(
-            heat, _coerce_ts(client_ts)
-        )
-
-        result = await session.execute(
-            select(LapEvent.recorded_at)
-            .where(LapEvent.lane_id == lane.id, LapEvent.is_undo.is_(False))
-            .order_by(LapEvent.recorded_at.desc())
-            .limit(1)
-        )
-        last_lap_at = result.scalar_one_or_none()
-        if (
-            last_lap_at is not None
-            and effective_ts - last_lap_at < settings.MIN_LAP_INTERVAL_S
-        ):
-            raise LaneActionError(409, "volta_duplicada")
-
-        result = await session.execute(
-            select(func.max(LapEvent.lap_number)).where(
-                LapEvent.lane_id == lane.id
-            )
-        )
-        current = result.scalar_one()
-        lap_number = int(current or 0) + 1
-        event = LapEvent(
-            lane_id=lane.id,
-            lap_number=lap_number,
-            recorded_at=effective_ts,
-            is_undo=False,
-            received_at=received_at,
-            late=late,
-        )
-        session.add(event)
-        if lane.status in ("assigned", "ready"):
-            lane.status = "active"
-        await session.flush()
-
-        payload = {
-            "id": event.id,
-            "lane_id": event.lane_id,
-            "lap_number": event.lap_number,
-            "recorded_at": event.recorded_at,
-            "is_undo": event.is_undo,
-            "received_at": received_at,
-            "late": late,
-        }
-        _remember_op(
-            session,
-            op_id=op_id,
-            lane_id=lane.id,
-            action="lap",
-            result=payload,
-        )
-        _log_action(
-            session,
-            action="lap",
-            received_at=received_at,
-            effective_ts=effective_ts,
-            event_id=heat.event_id,
-            heat_id=heat.id,
-            lane_id=lane.id,
-            op_id=op_id,
-            source_ip=source_ip,
-            payload={"lap_number": lap_number, "late": late},
-        )
-        await session.commit()
-        await session.refresh(event)
-        await _broadcast_heat(session, heat)
-        return payload
-
-
 @app.post("/api/lanes/{lane_id}/finish")
 async def lane_finish(
     lane_id: str,
@@ -2629,7 +1682,7 @@ async def _handle_ws_message(data: dict, websocket: WebSocket) -> None:
         )
         return
     source_ip = websocket.client.host if websocket.client else None
-    async with AsyncSessionLocal() as session:
+    async with database.AsyncSessionLocal() as session:
         try:
             result = await handler(
                 session,
@@ -2676,7 +1729,7 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
     await manager.connect(websocket)
     try:
         await _broadcast_server_status()
-        async with AsyncSessionLocal() as session:
+        async with database.AsyncSessionLocal() as session:
             result = await session.execute(
                 select(Heat)
                 .where(Heat.status.in_(("ready_check", "active")))

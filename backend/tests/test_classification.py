@@ -3,7 +3,7 @@ import asyncio
 
 import pytest
 
-import app.main as main_module
+from app import database as database_module
 from app.classification import build_classification, rank_valid
 from app.models import HeatLane
 from tests.conftest import (
@@ -215,7 +215,7 @@ async def _finish_battery(client, heat):
 
 
 async def _set_time(lane_id, time_ms):
-    async with main_module.AsyncSessionLocal() as session:
+    async with database_module.AsyncSessionLocal() as session:
         lane = await session.get(HeatLane, lane_id)
         lane.race_time_ms = time_ms
         await session.commit()

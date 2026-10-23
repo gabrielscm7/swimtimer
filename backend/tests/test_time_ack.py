@@ -16,7 +16,9 @@ from sqlalchemy.ext.asyncio import (
 )
 
 import app.main as main_module
+from app import database as database_module
 from app.database import Base, get_db
+from app.services import lane_actions
 from app.models import ActionLog, Heat, HeatLane, LapEvent, ProcessedOp
 
 
@@ -36,16 +38,16 @@ async def client(tmp_path):
         async with factory() as session:
             yield session
 
-    original = main_module.AsyncSessionLocal
+    original = database_module.AsyncSessionLocal
     main_module.app.dependency_overrides[get_db] = override_get_db
-    main_module.AsyncSessionLocal = factory
+    database_module.AsyncSessionLocal = factory
     try:
         transport = ASGITransport(app=main_module.app)
         async with AsyncClient(transport=transport, base_url="http://test") as ac:
             yield ac, factory
     finally:
         main_module.app.dependency_overrides.clear()
-        main_module.AsyncSessionLocal = original
+        database_module.AsyncSessionLocal = original
         await engine.dispose()
 
 
@@ -393,7 +395,7 @@ async def test_monotonic_anchor_fallback_uses_wall_clock(client):
 
     await _set_started_at(factory, heat["id"], time.time() - 12.0)
     # Simula restart: sem âncora em memória para esta bateria.
-    main_module._mono_anchors.pop(heat["id"], None)
+    lane_actions._mono_anchors.pop(heat["id"], None)
 
     response = await http.post(f"/api/lanes/{lane_id}/finish")
     assert response.status_code == 200, response.text
