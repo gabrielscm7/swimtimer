@@ -1,7 +1,13 @@
 import { api } from "../common/api.js";
 import { escapeHtml } from "../common/format.js";
-import { heatTypeLabel, showToast, statusLabel } from "../common/ui.js";
+import {
+  heatTypeLabel,
+  showFeedback,
+  showToast,
+  statusLabel,
+} from "../common/ui.js";
 import { DISTANCES, DURATIONS, LANE_COUNTS, els, state } from "./state.js";
+import { isOverrideError, promptSupervisorOverride } from "./override.js";
 import {
   heatsOfProva,
   isEditableHeat,
@@ -42,6 +48,7 @@ function laneGridHTML(heat) {
       lane &&
         lane.athlete_id &&
         provaNaipe &&
+        provaNaipe !== "MISTO" &&
         lane.naipe &&
         lane.naipe !== provaNaipe
     );
@@ -199,6 +206,7 @@ function wireAthleteDatalist() {
         if (warning) {
           warning.hidden = !(
             provaNaipe &&
+            provaNaipe !== "MISTO" &&
             athlete.naipe &&
             athlete.naipe !== provaNaipe
           );
@@ -327,19 +335,48 @@ function laneNumbersOf(heatId) {
 }
 
 
+async function submitLanes(heatId, lanes, button) {
+  const send = (extra = {}, headers = {}) =>
+    api(
+      "POST",
+      `/api/heats/${heatId}/lanes`,
+      { lanes, ...extra },
+      headers
+    );
+  showFeedback(button, "loading");
+  try {
+    await send();
+    showFeedback(button, "success");
+    setTimeout(refresh, 400);
+  } catch (error) {
+    showFeedback(button, "error");
+    const message = GestaoLogic.gestaoErrorMessage(error);
+    showToast(message, true);
+    if (!isOverrideError(error)) return;
+    promptSupervisorOverride({
+      message,
+      onConfirm: async (pin, reason) => {
+        await send(
+          { force: true, override_reason: reason },
+          { "X-Operator-Pin": pin }
+        );
+        await refresh();
+        showToast("Exceção autorizada");
+      },
+    });
+  }
+}
+
+
 async function saveLane(heatId, laneNumber, button) {
   const lanes = saveLaneInputs(heatId, [laneNumber]);
-  await withButton(button, async () => {
-    await api("POST", `/api/heats/${heatId}/lanes`, { lanes });
-  });
+  await submitLanes(heatId, lanes, button);
 }
 
 
 async function saveAllLanes(heatId, button) {
   const lanes = saveLaneInputs(heatId, laneNumbersOf(heatId));
-  await withButton(button, async () => {
-    await api("POST", `/api/heats/${heatId}/lanes`, { lanes });
-  });
+  await submitLanes(heatId, lanes, button);
 }
 
 

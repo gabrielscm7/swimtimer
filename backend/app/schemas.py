@@ -7,7 +7,10 @@ HeatType = Literal["maratona", "bateria"]
 HeatStatus = Literal["scheduled", "ready_check", "active", "finished"]
 LaneStatus = Literal["assigned", "ready", "active", "finished", "dq"]
 ClassificationCriterion = Literal["lowest_time"]
-Naipe = Literal["M", "F"]
+MixedRanking = Literal["overall", "by_naipe", "both"]
+# Atletas continuam apenas M/F; provas aceitam MISTO.
+AthleteNaipe = Literal["M", "F"]
+Naipe = Literal["M", "F", "MISTO"]
 
 _NAIPE_ALIASES = {
     "M": "M",
@@ -18,6 +21,10 @@ _NAIPE_ALIASES = {
     "FEM": "F",
     "FEMININO": "F",
     "FEMININA": "F",
+    "MISTO": "MISTO",
+    "MISTA": "MISTO",
+    "MIXTO": "MISTO",
+    "MIXED": "MISTO",
 }
 
 
@@ -110,6 +117,7 @@ class ProvaCreate(BaseModel):
     distance_m: Optional[int] = Field(default=None, gt=0)
     category: Optional[str] = Field(default=None, max_length=60)
     naipe: Optional[Naipe] = None
+    mixed_ranking: MixedRanking = "both"
     consolidate_results: bool = True
     classification_criterion: ClassificationCriterion = "lowest_time"
 
@@ -131,6 +139,7 @@ class ProvaUpdate(BaseModel):
     distance_m: Optional[int] = Field(default=None, gt=0)
     category: Optional[str] = Field(default=None, max_length=60)
     naipe: Optional[Naipe] = None
+    mixed_ranking: Optional[MixedRanking] = None
     consolidate_results: Optional[bool] = None
     classification_criterion: Optional[ClassificationCriterion] = None
 
@@ -162,6 +171,7 @@ class ProvaResponse(BaseModel):
     distance_m: int | None = None
     category: str | None = None
     naipe: str | None = None
+    mixed_ranking: str = "both"
     consolidate_results: bool = True
     classification_criterion: str = "lowest_time"
     status: str
@@ -176,6 +186,7 @@ class ClassificationEntry(BaseModel):
     heat_name: str
     heat_order_num: int
     lane_number: int
+    naipe: str | None = None
     participant_name: str | None = None
     team_id: str | None = None
     team_name: str | None = None
@@ -193,8 +204,10 @@ class ClassificationResponse(BaseModel):
     status: str
     consolidate_results: bool
     classification_criterion: str
+    mixed_ranking: str = "both"
     is_provisional: bool
     standings: list[ClassificationEntry] = Field(default_factory=list)
+    standings_by_naipe: dict[str, list[ClassificationEntry]] | None = None
     excluded: list[ClassificationEntry] = Field(default_factory=list)
     battery_results: list[dict] = Field(default_factory=list)
 
@@ -204,9 +217,10 @@ class ClassificationResponse(BaseModel):
 # --------------------------------------------------------------------------- #
 class AthleteCreate(BaseModel):
     name: str = Field(min_length=1, max_length=120)
-    naipe: Naipe
+    naipe: AthleteNaipe
     category: Optional[str] = Field(default=None, max_length=60)
     team_id: Optional[str] = None
+    registration_code: Optional[str] = Field(default=None, max_length=40)
 
     @field_validator("name", mode="before")
     @classmethod
@@ -215,6 +229,14 @@ class AthleteCreate(BaseModel):
             return value.strip()
         return value
 
+
+    @field_validator("registration_code", mode="before")
+    @classmethod
+    def _trim_registration_code(cls, value: object) -> object:
+        if isinstance(value, str):
+            cleaned = value.strip()
+            return cleaned or None
+        return value
     @field_validator("naipe", mode="before")
     @classmethod
     def _normalize_naipe(cls, value: object) -> object:
@@ -228,9 +250,12 @@ class AthleteCreate(BaseModel):
 
 class AthleteUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=120)
-    naipe: Optional[Naipe] = None
+    naipe: Optional[AthleteNaipe] = None
     category: Optional[str] = Field(default=None, max_length=60)
     team_id: Optional[str] = None
+    registration_code: Optional[str] = Field(default=None, max_length=40)
+    force: bool = False
+    override_reason: str | None = Field(default=None, max_length=500)
 
     @field_validator("name", mode="before")
     @classmethod
@@ -239,6 +264,14 @@ class AthleteUpdate(BaseModel):
             return value.strip()
         return value
 
+
+    @field_validator("registration_code", mode="before")
+    @classmethod
+    def _trim_registration_code(cls, value: object) -> object:
+        if isinstance(value, str):
+            cleaned = value.strip()
+            return cleaned or None
+        return value
     @field_validator("naipe", mode="before")
     @classmethod
     def _normalize_naipe(cls, value: object) -> object:
@@ -257,6 +290,7 @@ class AthleteResponse(BaseModel):
     name: str
     naipe: str
     category: str | None = None
+    registration_code: str | None = None
     created_at: float
     updated_at: float | None = None
     team_name: str | None = None
@@ -337,6 +371,11 @@ class HeatResponse(BaseModel):
     prova_id: str
     name: str
     order_num: int
+    event_seq: int | None = None
+    prova_order_num: int | None = None
+    prova_name: str | None = None
+    heat_index_in_prova: int | None = None
+    heats_in_prova: int | None = None
     heat_type: str
     distance_m: int | None = None
     duration_s: int | None = None
@@ -358,12 +397,16 @@ class HeatLaneConfigItem(BaseModel):
 
 class HeatLaneConfigRequest(BaseModel):
     lanes: list[HeatLaneConfigItem]
+    force: bool = False
+    override_reason: str | None = Field(default=None, max_length=500)
 
 
 class LaneUpdate(BaseModel):
     participant_name: Optional[str] = Field(default=None, max_length=200)
     athlete_id: Optional[str] = None
     team_id: Optional[str] = None
+    force: bool = False
+    override_reason: str | None = Field(default=None, max_length=500)
 
 
 class LaneActionRequest(BaseModel):
@@ -377,6 +420,7 @@ class HeatLaneResponse(BaseModel):
     id: str
     heat_id: str
     lane_number: int
+    naipe: str | None = None
     participant_name: str | None = None
     athlete_id: str | None = None
     naipe: str | None = None
@@ -396,6 +440,7 @@ class HeatLaneResponse(BaseModel):
 class FinishResponse(BaseModel):
     lane_id: str
     lane_number: int
+    naipe: str | None = None
     participant_name: str | None = None
     team_name: str | None = None
     race_time_ms: int

@@ -9,7 +9,17 @@ import { heatTypeLabel } from "./common/ui.js";
 import { serverNow } from "./common/clock.js";
 import { WSClient, wsUrl } from "./common/ws.js";
 
+const {
+  heatsSorted,
+  nextScheduledAfter: nextScheduledAfterSeq,
+  lastFinished: lastFinishedSeq,
+  nextInProva,
+  nextProvaAfter,
+  provaHeaderLabel,
+} = window.SequenceLogic;
+
 const RESULT_MS = 20000;
+const PROVA_RESULT_MS = 30000;
 
 const params = new URLSearchParams(window.location.search);
 const eventId = params.get("event");
@@ -36,7 +46,7 @@ let classificationRequest = null;
 // --------------------------------------------------------------------------- //
 function heats() {
   if (!eventData) return [];
-  return [...eventData.heats].sort((a, b) => a.order_num - b.order_num);
+  return heatsSorted(eventData.heats);
 }
 
 function currentHeat() {
@@ -50,17 +60,12 @@ function participantLanes(heat) {
     .sort((a, b) => a.lane_number - b.lane_number);
 }
 
-function nextScheduledAfter(orderNum) {
-  return (
-    heats().find(
-      (heat) => heat.order_num > orderNum && heat.status === "scheduled"
-    ) || null
-  );
+function nextScheduledAfter(eventSeq) {
+  return nextScheduledAfterSeq(heats(), eventSeq);
 }
 
 function lastFinished() {
-  const finished = heats().filter((heat) => heat.status === "finished");
-  return finished.length ? finished[finished.length - 1] : null;
+  return lastFinishedSeq(heats());
 }
 
 function provaOf(heat) {
@@ -80,9 +85,9 @@ function logoImg(url, name) {
   )}" loading="lazy" />`;
 }
 
-function classificationRows(data) {
+function classificationRows(standings, excluded) {
   const rows = [];
-  for (const entry of data.standings || []) {
+  for (const entry of standings || []) {
     rows.push(`
       <div class="pub-trow finished">
         <div class="pub-pos ${posClass((entry.position || 1) - 1)}">${entry.position ?? "—"}º${entry.tied ? "=" : ""}</div>
@@ -91,7 +96,7 @@ function classificationRows(data) {
         <div class="pub-time">${entry.race_time_display || "—"}</div>
       </div>`);
   }
-  for (const entry of data.excluded || []) {
+  for (const entry of excluded || []) {
     const label =
       entry.classification_status === "dq"
         ? "DQ"
@@ -111,12 +116,30 @@ function classificationRows(data) {
 
 function classificationTable(data) {
   const badge = data.is_provisional ? "provisória" : "definitiva";
-  return `
-    <div class="pub-label" style="color:var(--cyan)">Classificação ${badge}</div>
+  const mode = data.mixed_ranking || "both";
+  const section = (title, standings, excluded = []) => `
+    <div class="pub-label" style="color:var(--cyan)">${escapeHtml(title)} ${badge}</div>
     <div class="pub-table pub-battery" style="margin-bottom:12px">
       <div class="pub-thead"><div>Pos</div><div>Atleta</div><div>Equipe</div><div style="text-align:right">Tempo</div></div>
-      ${classificationRows(data) || '<div class="pub-trow"><div class="muted">Sem resultados</div></div>'}
+      ${classificationRows(standings, excluded) || '<div class="pub-trow"><div class="muted">Sem resultados</div></div>'}
     </div>`;
+  const sections = [];
+  if (mode !== "by_naipe") {
+    sections.push(
+      section("Classificação", data.standings || [], data.excluded || [])
+    );
+  }
+  if (mode !== "overall" && data.standings_by_naipe) {
+    for (const naipe of ["M", "F"]) {
+      sections.push(
+        section(
+          `Classificação ${naipe === "M" ? "Masculino" : "Feminino"}`,
+          data.standings_by_naipe[naipe] || []
+        )
+      );
+    }
+  }
+  return sections.join("");
 }
 
 function allFinished() {
@@ -171,12 +194,18 @@ function setState(next, options = {}) {
     window.clearTimeout(resultTimer);
     resultTimer = null;
   }
-  if (next === 4) {
+  if (next === 4 || next === 7) {
     renderState(true);
     resultTimer = window.setTimeout(() => {
       resultTimer = null;
-      goAfterResult();
-    }, RESULT_MS);
+      if (next === 7) goAfterProvaResult();
+      else goAfterResult();
+    }, next === 7 ? PROVA_RESULT_MS : RESULT_MS);
+    if (next === 7) {
+      refreshClassifications().then(() => {
+        if (state === 7) renderState(false);
+      });
+    }
   } else {
     renderState(!same);
   }
@@ -191,11 +220,23 @@ function renderState(fade) {
   else if (state === 4) render(viewResult(), fade);
   else if (state === 5) render(viewInterval(), fade);
   else if (state === 6) render(viewEnded(), fade);
+  else if (state === 7) render(viewProvaResult(), fade);
 }
 
 function goAfterResult() {
   const heat = currentHeat();
-  const next = heat ? nextScheduledAfter(heat.order_num) : null;
+  if (!heat) return setState(1, { heatId: null });
+  // Ultima bateria da prova: mostra o resultado final da prova antes
+  // de seguir para a proxima bateria/prova.
+  if (!nextInProva(heats(), heat)) {
+    return setState(7, { heatId: heat.id });
+  }
+  setState(5, { heatId: heat.id });
+}
+
+function goAfterProvaResult() {
+  const heat = currentHeat();
+  const next = heat ? nextScheduledAfter(heat.event_seq) : null;
   if (next) setState(5, { heatId: heat.id });
   else if (allFinished()) setState(6, { heatId: null });
   else setState(1, { heatId: null });
@@ -264,7 +305,7 @@ function viewWaiting() {
     .slice(0, 4)
     .map(
       (heat) =>
-        `<div class="pub-up-item"><span class="pub-up-num">${heat.order_num}</span><span>${escapeHtml(heat.name)} <span class="muted">· ${heatTypeLabel(heat)}</span></span></div>`
+        `<div class="pub-up-item"><span class="pub-up-num">${heat.event_seq}</span><span>${escapeHtml(provaHeaderLabel(heat))} <span class="muted">· ${heatTypeLabel(heat)}</span></span></div>`
     )
     .join("");
   return `
@@ -295,8 +336,8 @@ function viewReady() {
   return `
     <div class="pub-top-event">${escapeHtml(eventData.name)}</div>
     <div class="pub-center">
-      <div class="pub-label">Próxima prova</div>
-      <div class="pub-heat-name">${escapeHtml(heat.name)}</div>
+      <div class="pub-label">A seguir</div>
+      <div class="pub-heat-name">${escapeHtml(provaHeaderLabel(heat))}</div>
       <div class="pub-heat-type">${heatTypeLabel(heat)}</div>
       <div class="pub-lane-grid">${cards || '<div class="muted">Sem participantes</div>'}</div>
     </div>
@@ -314,7 +355,7 @@ function viewRacing() {
     <div class="pub-racing-top">
       <div class="pub-racing-meta">
         <div class="muted" style="font-size:clamp(14px,1.4vw,22px)">${escapeHtml(eventData.name)}</div>
-        <div class="pub-heat-name">${escapeHtml(heat.name)}</div>
+        <div class="pub-heat-name">${escapeHtml(provaHeaderLabel(heat))}</div>
         <div class="pub-heat-type">${heatTypeLabel(heat)}</div>
       </div>
       <div class="pub-racing-clock">${clock}</div>
@@ -465,9 +506,9 @@ function viewResult() {
     prova && prova.consolidate_results ? classifications[prova.id] : null;
   return `
     <div class="pub-center" style="justify-content:flex-start;padding-top:12px">
-      <div class="pub-label" style="color:var(--cyan)">🏁 Resultado final</div>
-      <div class="pub-heat-name">${escapeHtml(heat.name)}</div>
-      ${prova ? `<div class="pub-heat-type">${escapeHtml(prova.name)}</div>` : ""}
+      <div class="pub-label" style="color:var(--cyan)">🏁 Resultado da bateria</div>
+      <div class="pub-heat-name">${escapeHtml(provaHeaderLabel(heat))}</div>
+      <div class="pub-heat-type">${heatTypeLabel(heat)}</div>
       ${podium(heat)}
       <div class="pub-result-table" style="width:100%;max-width:1100px;margin-top:8px">
         ${compactTable(heat)}
@@ -478,24 +519,64 @@ function viewResult() {
 
 function viewInterval() {
   const heat = currentHeat();
-  const next = heat ? nextScheduledAfter(heat.order_num) : null;
-  const lanes = next ? participantLanes(next) : [];
-  const nextInfo = next
-    ? `
+  const inProva = heat ? nextInProva(heats(), heat) : null;
+  const nextProva =
+    heat && !inProva ? nextProvaAfter(heats(), provasSorted(), heat) : null;
+  let nextInfo;
+  if (inProva) {
+    const lanes = participantLanes(inProva);
+    nextInfo = `
       <div class="pub-label">A seguir</div>
-      <div class="pub-heat-name">${escapeHtml(next.name)}</div>
-      <div class="pub-heat-type">${heatTypeLabel(next)}</div>
+      <div class="pub-heat-name">${escapeHtml(provaHeaderLabel(inProva))}</div>
+      <div class="pub-heat-type">${heatTypeLabel(inProva)}</div>
       <div style="margin-top:24px">
         ${lanes.map((lane) => `<div class="pub-up-item"><span class="pub-up-num">R${lane.lane_number}</span><span>${escapeHtml(lane.participant_name || "—")} <span class="muted">· ${escapeHtml(lane.team || "sem equipe")}</span></span></div>`).join("") || '<div class="muted">Sem participantes</div>'}
-      </div>`
-    : '<div class="muted">Nenhuma próxima bateria</div>';
+      </div>`;
+  } else if (nextProva) {
+    nextInfo = `
+      <div class="pub-label">Próxima prova:</div>
+      <div class="pub-heat-name">${escapeHtml(`${nextProva.prova.order_num}. ${nextProva.prova.name}`)}</div>
+      <div class="pub-heat-type">${escapeHtml(provaHeaderLabel(nextProva.heat))}</div>`;
+  } else {
+    nextInfo = '<div class="muted">Nenhuma próxima bateria</div>';
+  }
+  const prova = heat ? provaOf(heat) : null;
+  const partial =
+    prova && prova.consolidate_results ? classifications[prova.id] : null;
   return `
     <div class="pub-interval">
       <div class="pub-interval-col">
-        <div class="pub-label">Resultado — ${heat ? escapeHtml(heat.name) : ""}</div>
+        <div class="pub-label">Resultado — ${heat ? escapeHtml(provaHeaderLabel(heat)) : ""}</div>
         ${heat ? compactTable(heat) : ""}
+        ${partial ? classificationTable(partial) : ""}
       </div>
       <div class="pub-interval-col">${nextInfo}</div>
+    </div>`;
+}
+
+function viewProvaResult() {
+  const heat = currentHeat();
+  if (!heat) return viewWaiting();
+  const prova = provaOf(heat);
+  const data =
+    prova && prova.consolidate_results ? classifications[prova.id] : null;
+  const meta = prova
+    ? [
+        prova.naipe === "MISTO" ? "Misto" : "",
+        prova.category || "",
+        prova.distance_m ? `${prova.distance_m}m` : "",
+      ]
+        .filter(Boolean)
+        .join(" · ")
+    : "";
+  return `
+    <div class="pub-center" style="justify-content:flex-start;padding-top:16px">
+      <div class="pub-label" style="color:var(--cyan)">🏁 Resultado final da prova</div>
+      <div class="pub-heat-name">${escapeHtml(prova ? `${prova.order_num}. ${prova.name}` : heat.prova_name || heat.name)}</div>
+      ${meta ? `<div class="pub-heat-type">${escapeHtml(meta)}</div>` : ""}
+      <div class="pub-result-table" style="width:100%;max-width:1100px;margin-top:12px">
+        ${data ? classificationTable(data) : perBattery || '<div class="muted">Classificação em processamento…</div>'}
+      </div>
     </div>`;
 }
 
@@ -515,7 +596,7 @@ function viewEnded() {
             .map(
               (heat) => `
               <div class="pub-end-group">
-                <div class="pub-heat-name" style="font-size:clamp(18px,2vw,30px)">${heat.order_num}. ${escapeHtml(heat.name)}</div>
+                <div class="pub-heat-name" style="font-size:clamp(18px,2vw,30px)">Bateria ${heat.heat_index_in_prova ?? heat.order_num} · ${escapeHtml(heat.name)}</div>
                 ${compactTable(heat)}
               </div>`
             )
@@ -548,7 +629,10 @@ function reconcile() {
   if (ready) return setState(2, { heatId: ready.id });
   if (allFinished()) return setState(6, { heatId: null });
   const last = lastFinished();
-  if (last && nextScheduledAfter(last.order_num)) {
+  if (last && nextScheduledAfter(last.event_seq)) {
+    if (!nextInProva(heats(), last)) {
+      return setState(7, { heatId: last.id });
+    }
     return setState(5, { heatId: last.id });
   }
   return setState(1, { heatId: null });
@@ -599,6 +683,7 @@ function upsertProva(payload) {
     stroke: payload.stroke,
     distance_m: payload.distance_m,
     naipe: payload.naipe,
+    mixed_ranking: payload.mixed_ranking,
     category: payload.category,
     consolidate_results: payload.consolidate_results,
     classification_criterion: payload.classification_criterion,

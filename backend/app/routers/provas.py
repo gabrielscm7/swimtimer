@@ -19,6 +19,7 @@ from ..services.payloads import (
     _classification_payload,
     _prova_heats,
     _prova_payload,
+    _prova_summary_payload,
     _provas_payload,
     _sync_prova_status,
 )
@@ -56,6 +57,7 @@ async def _create_prova_record(
         distance_m=payload.distance_m,
         category=payload.category,
         naipe=payload.naipe,
+        mixed_ranking=payload.mixed_ranking,
         consolidate_results=payload.consolidate_results,
         classification_criterion=payload.classification_criterion,
         status="scheduled",
@@ -246,3 +248,12 @@ async def get_prova_classification(
 ) -> dict:
     prova = await _get_prova(session, prova_id)
     return await _classification_payload(session, prova)
+
+
+@router.get("/api/provas/{prova_id}/summary")
+async def get_prova_summary(
+    prova_id: str,
+    session: AsyncSession = Depends(get_db),
+) -> dict:
+    prova = await _get_prova(session, prova_id)
+    return await _prova_summary_payload(session, prova)

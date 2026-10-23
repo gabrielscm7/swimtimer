@@ -107,7 +107,7 @@ async def test_reorder_heats_blocks_started_heat(client):
         json={"ids": [second["id"], first["id"]]},
     )
     assert response.status_code == 409
-    assert response.json()["detail"] == "prova_ja_iniciada"
+    assert response.json()["detail"] == "bateria_ja_iniciada"
 
 
 @pytest.mark.asyncio

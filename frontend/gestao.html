@@ -40,6 +40,23 @@
       </section>
     </main>
 
+    <div class="modal-overlay" id="override-modal">
+      <div class="modal">
+        <h2>Autorizar exceção (supervisor)</h2>
+        <p class="muted" id="override-message">A inscrição viola uma regra.</p>
+        <label for="override-pin">PIN do supervisor</label>
+        <input id="override-pin" type="password" autocomplete="off" />
+        <label for="override-reason" style="margin-top:10px">Motivo da exceção</label>
+        <input id="override-reason" type="text" maxlength="500"
+          placeholder="Ex.: autorizado pela organização" />
+        <div class="field-error" id="override-error" hidden></div>
+        <div class="row" style="margin-top: 12px">
+          <button style="flex: 1" id="override-cancel">Cancelar</button>
+          <button style="flex: 1" class="primary" id="override-confirm">Autorizar exceção (supervisor)</button>
+        </div>
+      </div>
+    </div>
+
     <script src="/static/clock_logic.js"></script>
     <script src="/static/gestao_logic.js"></script>
     <script type="module" src="/static/gestao/main.js"></script>

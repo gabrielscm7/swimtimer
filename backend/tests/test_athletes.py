@@ -224,3 +224,58 @@ async def test_update_athlete_rejects_null_name(client):
     )
     assert response.status_code == 422
     assert response.json()["detail"] == "nome_obrigatorio"
+
+
+@pytest.mark.asyncio
+async def test_homonimos_mesma_equipe_com_codigos_distintos(client):
+    event = await create_event(client)
+    team = await create_team(client, event["id"], "Leões")
+    first = await create_athlete(
+        client,
+        event["id"],
+        name="João Silva",
+        naipe="M",
+        team_id=team["id"],
+        registration_code="A-001",
+    )
+    second = await create_athlete(
+        client,
+        event["id"],
+        name="João Silva",
+        naipe="M",
+        team_id=team["id"],
+        registration_code="A-002",
+    )
+    assert first["registration_code"] == "A-001"
+    assert second["registration_code"] == "A-002"
+
+    duplicate = await client.post(
+        f"/api/events/{event['id']}/athletes",
+        json={
+            "name": "João Silva",
+            "naipe": "M",
+            "team_id": team["id"],
+            "registration_code": "A-001",
+        },
+    )
+    assert duplicate.status_code == 409, duplicate.text
+    assert duplicate.json()["detail"] == "atleta_duplicado"
+
+
+@pytest.mark.asyncio
+async def test_update_registration_code(client):
+    event = await create_event(client)
+    athlete = await create_athlete(client, event["id"], name="Ana")
+    response = await client.patch(
+        f"/api/athletes/{athlete['id']}",
+        json={"registration_code": "  B-010  "},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["registration_code"] == "B-010"
+
+    cleared = await client.patch(
+        f"/api/athletes/{athlete['id']}",
+        json={"registration_code": "   "},
+    )
+    assert cleared.status_code == 200, cleared.text
+    assert cleared.json()["registration_code"] is None

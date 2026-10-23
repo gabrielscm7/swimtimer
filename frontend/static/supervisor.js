@@ -15,6 +15,8 @@ import {
 import { serverNow } from "./common/clock.js";
 import { WSClient, wsUrl } from "./common/ws.js";
 
+const { heatsSorted } = window.SequenceLogic;
+
 const params = new URLSearchParams(window.location.search);
 const eventId = params.get("event");
 if (!eventId) {
@@ -55,17 +57,9 @@ function provaOf(heat) {
   return eventData.provas.find((prova) => prova.id === heat.prova_id) || null;
 }
 
-function provaOrderOf(heat) {
-  const prova = provaOf(heat);
-  return prova ? prova.order_num : 0;
-}
-
 function sortedHeats() {
   if (!eventData) return [];
-  return [...eventData.heats].sort(
-    (a, b) =>
-      provaOrderOf(a) - provaOrderOf(b) || a.order_num - b.order_num
-  );
+  return heatsSorted(eventData.heats);
 }
 
 function currentHeat() {
@@ -664,6 +658,7 @@ const ws = new WSClient(wsUrl(), (message) => {
         stroke: message.payload.stroke,
         distance_m: message.payload.distance_m,
         naipe: message.payload.naipe,
+        mixed_ranking: message.payload.mixed_ranking,
         category: message.payload.category,
         consolidate_results: message.payload.consolidate_results,
         classification_criterion: message.payload.classification_criterion,

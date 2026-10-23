@@ -2,14 +2,22 @@
 (function (root) {
   const TERMINAL_MESSAGES = [
     "ja_finalizou",
+    // Nomes atuais (contexto de bateria).
+    "bateria_nao_ativa",
+    "bateria_nao_iniciada",
+    "bateria_nao_encontrada",
+    "bateria_nao_esta_em_ready_check",
+    "bateria_nao_esta_scheduled",
+    // Nomes antigos mantidos durante a transicao.
     "prova_nao_ativa",
+    "prova_nao_iniciada",
+    "prova_nao_esta_em_ready_check",
+    "prova_nao_esta_scheduled",
+    "prova_nao_encontrada",
     "nao_e_bateria",
     "nao_e_maratona",
     "fora_do_prazo",
-    "prova_nao_esta_em_ready_check",
-    "prova_nao_esta_scheduled",
     "raia_nao_encontrada",
-    "prova_nao_encontrada",
     "nenhum_lap",
     "sem_participantes",
     "raias_duplicadas",

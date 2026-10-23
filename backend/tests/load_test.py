@@ -16,11 +16,17 @@ import sys
 import tempfile
 import time
 
-N_PROVAS = int(os.environ.get("LOAD_PROVAS", "5"))
-HEATS_PER_PROVA = int(os.environ.get("LOAD_HEATS", "4"))
+N_PROVAS = int(os.environ.get("LOAD_PROVAS", "8"))
+TOTAL_HEATS = int(os.environ.get("LOAD_TOTAL_HEATS", "50"))
 LANES = int(os.environ.get("LOAD_LANES", "8"))
-TEAMS = int(os.environ.get("LOAD_TEAMS", "20"))
-ATHLETES = int(os.environ.get("LOAD_ATHLETES", "200"))
+TEAMS = int(os.environ.get("LOAD_TEAMS", "8"))
+ATHLETES = int(os.environ.get("LOAD_ATHLETES", "150"))
+
+
+def _heats_for_prova(index: int) -> int:
+    """Distribui o total de baterias entre as provas (ex.: 50 em 8)."""
+    base, remainder = divmod(TOTAL_HEATS, N_PROVAS)
+    return base + (1 if index < remainder else 0)
 
 
 async def _time(coro):
@@ -55,8 +61,8 @@ async def main() -> None:
     log(f"- Plataforma: {platform.platform()}")
     log(f"- SQLite: {__import__('sqlite3').sqlite_version}")
     log(
-        f"- Massa: {N_PROVAS} provas x {HEATS_PER_PROVA} baterias x "
-        f"{LANES} raias = {N_PROVAS * HEATS_PER_PROVA * LANES} raias; "
+        f"- Massa: {N_PROVAS} provas x {TOTAL_HEATS} baterias x "
+        f"{LANES} raias = {TOTAL_HEATS * LANES} raias; "
         f"{TEAMS} equipes; {ATHLETES} atletas importados"
     )
     log()
@@ -136,7 +142,8 @@ async def main() -> None:
                     )
                 ).json()
                 provas.append(prova)
-                for h in range(HEATS_PER_PROVA):
+                heats_here = _heats_for_prova(p)
+                for h in range(heats_here):
                     heat = (
                         await client.post(
                             f"/api/provas/{prova['id']}/heats",
@@ -156,7 +163,7 @@ async def main() -> None:
                                     f"Atleta P{p + 1} B{h + 1} R{lane_number}"
                                 ),
                                 "team_id": teams[
-                                    (p * HEATS_PER_PROVA + h) % len(teams)
+                                    (p * TOTAL_HEATS + h) % len(teams)
                                 ]["id"],
                             }
                         )
@@ -164,7 +171,7 @@ async def main() -> None:
                         f"/api/heats/{heat['id']}/lanes", json={"lanes": lanes}
                     )
             setup_ms = (time.perf_counter() - setup_start) * 1000
-            total_heats = N_PROVAS * HEATS_PER_PROVA
+            total_heats = TOTAL_HEATS
             log("## Criacao de dados")
             log(
                 f"- {total_heats} baterias + {total_heats * LANES} raias em "
@@ -186,6 +193,10 @@ async def main() -> None:
                     "GET /api/provas/{id}/classification",
                     f"/api/provas/{provas[0]['id']}/classification",
                 ),
+                (
+                    "GET /api/provas/{id}/summary",
+                    f"/api/provas/{provas[0]['id']}/summary",
+                ),
             ]:
                 durations = []
                 size = 0
@@ -200,7 +211,7 @@ async def main() -> None:
                 )
             log()
 
-            log(f"## Concorrencia ({HEATS_PER_PROVA} baterias da prova 1)")
+            log(f"## Concorrencia ({_heats_for_prova(0)} baterias da prova 1)")
             active = []
             for heat in (
                 await client.get(f"/api/provas/{provas[0]['id']}/heats")

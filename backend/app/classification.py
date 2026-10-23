@@ -52,6 +52,7 @@ def _entry(
         "heat_name": heat.get("name", ""),
         "heat_order_num": heat.get("order_num", 0),
         "lane_number": lane.get("lane_number", 0),
+        "naipe": lane.get("naipe"),
         "participant_name": lane.get("participant_name"),
         "team_id": lane.get("team_id"),
         "team_name": team["name"] if team else None,
@@ -117,12 +118,18 @@ def rank_valid(entries: list[dict]) -> list[dict]:
     return ordered
 
 
+def _ranked_copy(entries: list[dict]) -> list[dict]:
+    """Ranking em copias: overall e by_naipe nao compartilham posicao."""
+    return rank_valid([dict(entry) for entry in entries])
+
+
 def build_classification(
     *,
     consolidate_results: bool,
     heats: list[dict],
     team_map: dict[str, dict],
     pool_distance_m: int | None,
+    mixed_ranking: str = "both",
 ) -> dict:
     """Monta a resposta de classificacao a partir de heats ja carregados.
 
@@ -160,7 +167,9 @@ def build_classification(
     result = {
         "status": prova_status(statuses),
         "is_provisional": provisional,
+        "mixed_ranking": mixed_ranking,
         "standings": [],
+        "standings_by_naipe": None,
         "excluded": [],
         "battery_results": battery_results,
     }
@@ -168,9 +177,20 @@ def build_classification(
     if not consolidate_results:
         return result
 
-    valid = [entry for entry in all_entries if entry["classification_status"] == "valid"]
-    standings = rank_valid(valid)
-    result["standings"] = standings
+    valid = [
+        entry
+        for entry in all_entries
+        if entry["classification_status"] == "valid"
+    ]
+    if mixed_ranking in ("overall", "both"):
+        result["standings"] = _ranked_copy(valid)
+    if mixed_ranking in ("by_naipe", "both"):
+        result["standings_by_naipe"] = {
+            naipe: _ranked_copy(
+                [entry for entry in valid if entry.get("naipe") == naipe]
+            )
+            for naipe in ("M", "F")
+        }
     excluded = [
         entry
         for entry in all_entries

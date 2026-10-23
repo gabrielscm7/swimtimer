@@ -109,12 +109,15 @@ async def create_athlete(
     naipe: str = "M",
     category: str | None = None,
     team_id: str | None = None,
+    registration_code: str | None = None,
 ) -> dict:
     body: dict = {"name": name, "naipe": naipe}
     if category is not None:
         body["category"] = category
     if team_id is not None:
         body["team_id"] = team_id
+    if registration_code is not None:
+        body["registration_code"] = registration_code
     response = await client.post(
         f"/api/events/{event_id}/athletes", json=body
     )

@@ -8,6 +8,7 @@ from fastapi import (
     File,
     HTTPException,
     Query,
+    Request,
     Response,
     UploadFile,
 )
@@ -30,12 +31,14 @@ from ..schemas import (
 )
 from ..services.athlete_import import (
     _IMPORT_COLUMNS,
+    _REQUIRED_COLUMNS,
     _cell,
     _detect_header,
     _parse_csv_rows,
     _parse_xlsx_rows,
 )
 from ..services.broadcast import manager
+from ..services.inscricao import enforce_athlete_update
 from ..services.lookups import _get_event
 
 router = APIRouter()
@@ -49,6 +52,7 @@ def _athlete_dict(athlete: Athlete, team: Team | None = None) -> dict:
         "name": athlete.name,
         "naipe": athlete.naipe,
         "category": athlete.category,
+        "registration_code": athlete.registration_code,
         "created_at": athlete.created_at,
         "updated_at": athlete.updated_at,
         "team_name": team.name if team else None,
@@ -89,6 +93,7 @@ async def _athlete_duplicate_exists(
     event_id: str,
     name: str,
     team_id: str | None,
+    registration_code: str | None,
     *,
     exclude_id: str | None = None,
 ) -> bool:
@@ -99,6 +104,8 @@ async def _athlete_duplicate_exists(
             Athlete.event_id == event_id,
             func.lower(Athlete.name) == name.lower(),
             func.coalesce(Athlete.team_id, "") == (team_id or ""),
+            func.coalesce(Athlete.registration_code, "")
+            == (registration_code or ""),
         )
     )
     if exclude_id is not None:
@@ -119,7 +126,11 @@ async def create_athlete(
     await _get_event(session, event_id)
     team = await _validate_athlete_team(session, event_id, payload.team_id)
     if await _athlete_duplicate_exists(
-        session, event_id, payload.name, payload.team_id
+        session,
+        event_id,
+        payload.name,
+        payload.team_id,
+        payload.registration_code,
     ):
         raise HTTPException(status_code=409, detail="atleta_duplicado")
 
@@ -129,6 +140,7 @@ async def create_athlete(
         name=payload.name,
         naipe=payload.naipe,
         category=payload.category,
+        registration_code=payload.registration_code,
         created_at=time.time(),
     )
     session.add(athlete)
@@ -218,10 +230,13 @@ async def get_athlete(
 async def update_athlete(
     athlete_id: str,
     payload: AthleteUpdate,
+    request: Request,
     session: AsyncSession = Depends(get_db),
 ) -> dict:
     athlete = await _get_athlete(session, athlete_id)
-    data = payload.model_dump(exclude_unset=True)
+    data = payload.model_dump(
+        exclude_unset=True, exclude={"force", "override_reason"}
+    )
     if "name" in data and not data["name"]:
         raise HTTPException(status_code=422, detail="nome_obrigatorio")
 
@@ -232,15 +247,38 @@ async def update_athlete(
 
     new_name = data.get("name", athlete.name)
     new_team_id = data["team_id"] if "team_id" in data else athlete.team_id
-    if "name" in data or "team_id" in data:
+    new_registration_code = (
+        data["registration_code"]
+        if "registration_code" in data
+        else athlete.registration_code
+    )
+    if (
+        "name" in data
+        or "team_id" in data
+        or "registration_code" in data
+    ):
         if await _athlete_duplicate_exists(
             session,
             athlete.event_id,
             new_name,
             new_team_id,
+            new_registration_code,
             exclude_id=athlete.id,
         ):
             raise HTTPException(status_code=409, detail="atleta_duplicado")
+
+    if "naipe" in data or "category" in data:
+        await enforce_athlete_update(
+            session,
+            athlete=athlete,
+            naipe=data.get("naipe", athlete.naipe),
+            category=(
+                data["category"] if "category" in data else athlete.category
+            ),
+            force=payload.force,
+            override_reason=payload.override_reason,
+            request=request,
+        )
 
     for field, value in data.items():
         setattr(athlete, field, value)
@@ -318,7 +356,9 @@ async def import_athletes(
 
     header_index, header_map = _detect_header(rows)
     missing = [
-        column for column in _IMPORT_COLUMNS if column not in header_map
+        column
+        for column in _REQUIRED_COLUMNS
+        if column not in header_map
     ]
     if missing:
         raise HTTPException(
@@ -337,12 +377,13 @@ async def import_athletes(
         team.name.casefold(): team for team in result.scalars().all()
     }
     result = await session.execute(
-        select(Athlete.name, Athlete.team_id).where(
-            Athlete.event_id == event_id
-        )
+        select(
+            Athlete.name, Athlete.team_id, Athlete.registration_code
+        ).where(Athlete.event_id == event_id)
     )
     existing_keys = {
-        (name.casefold(), team_id or "") for name, team_id in result.all()
+        (name.casefold(), team_id or "", registration_code or "")
+        for name, team_id, registration_code in result.all()
     }
 
     errors: list[dict] = []
@@ -355,6 +396,7 @@ async def import_athletes(
     team_col = header_map["EQUIPE"]
     naipe_col = header_map["NAIPE"]
     category_col = header_map["CATEGORIA"]
+    registration_col = header_map.get("REGISTRO")
 
     for index, row in enumerate(rows):
         if index <= header_index:
@@ -365,8 +407,15 @@ async def import_athletes(
         team_name = _cell(row, team_col)
         naipe_raw = _cell(row, naipe_col)
         category_raw = _cell(row, category_col)
+        registration_raw = _cell(row, registration_col)
 
-        if not name and not team_name and not naipe_raw and not category_raw:
+        if (
+            not name
+            and not team_name
+            and not naipe_raw
+            and not category_raw
+            and not registration_raw
+        ):
             skipped += 1
             continue
         if not name:
@@ -393,7 +442,12 @@ async def import_athletes(
                 created_teams += 1
             team_id = team.id
 
-        duplicate_key = (name.casefold(), team_id or "")
+        registration_code = registration_raw or None
+        duplicate_key = (
+            name.casefold(),
+            team_id or "",
+            registration_code or "",
+        )
         if duplicate_key in existing_keys:
             errors.append(
                 {"line": line, "field": "nome", "message": "atleta_duplicado"}
@@ -408,6 +462,7 @@ async def import_athletes(
                 name=name,
                 naipe=naipe,
                 category=normalize_category(category_raw),
+                registration_code=registration_code,
                 created_at=now,
             )
         )
@@ -451,7 +506,9 @@ async def download_athletes_template(
         workbook = Workbook()
         sheet = workbook.active
         sheet.append(list(_IMPORT_COLUMNS))
-        sheet.append(["Maria Silva", "Equipe A", "F", "SUB-12"])
+        sheet.append(
+            ["Maria Silva", "Equipe A", "F", "SUB-12", "A-001"]
+        )
         buffer = io.BytesIO()
         workbook.save(buffer)
         return _attachment_response(
@@ -462,7 +519,7 @@ async def download_athletes_template(
 
     return _attachment_response(
         ("\ufeff" + ",".join(_IMPORT_COLUMNS) + "\n"
-         "Maria Silva,Equipe A,F,SUB-12\n").encode("utf-8"),
+         "Maria Silva,Equipe A,F,SUB-12,A-001\n").encode("utf-8"),
         "modelo_atletas.csv",
         "text/csv; charset=utf-8",
     )
@@ -490,6 +547,7 @@ async def export_athletes(
                 team_name or "",
                 athlete.naipe,
                 athlete.category or "",
+                athlete.registration_code or "",
             ]
         )
     return _attachment_response(

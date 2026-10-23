@@ -4,6 +4,8 @@ import { pluralize, showToast, statusLabel } from "./common/ui.js";
 import { serverNow } from "./common/clock.js";
 import { WSClient, wsUrl } from "./common/ws.js";
 
+const { heatsSorted } = window.SequenceLogic;
+
 const els = {
   badge: document.getElementById("conn-badge"),
   dot: document.getElementById("server-dot"),
@@ -37,7 +39,8 @@ function formatUptime(seconds) {
 function allHeats() {
   const heats = [];
   for (const event of events) {
-    for (const heat of event.heats) heats.push({ event, heat });
+    // Ordem canonica por event_seq (order_num reinicia a cada prova).
+    for (const heat of heatsSorted(event.heats)) heats.push({ event, heat });
   }
   return heats;
 }

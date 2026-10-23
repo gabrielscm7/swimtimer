@@ -109,7 +109,7 @@ def test_ws_action_error_keeps_connection(ws_client):
 
         websocket.send_json({"type": "finish", "lane_id": lane_id})
         error = _recv_of_type(websocket, "error")
-        assert error["message"] == "prova_nao_ativa"
+        assert error["message"] == "bateria_nao_ativa"
 
         websocket.send_json({"type": "lap", "lane_id": lane_id})
         second = _recv_of_type(websocket, "error")
@@ -182,3 +182,115 @@ def test_ws_reconnect_recovers_active_state(ws_client):
             websocket, "heat_state", "heat_id", heat["id"]
         )
         assert message["payload"]["status"] == "active"
+
+
+def test_ws_messages_carry_event_id(ws_client):
+    event = _create_event(ws_client, name="Evento WS event_id")
+    heat = _create_heat(ws_client, event["id"])
+    ws_client.post(
+        f"/api/heats/{heat['id']}/lanes",
+        json={"lanes": [{"lane_number": 1, "participant_name": "Ana"}]},
+    )
+
+    with ws_client.websocket_connect("/ws") as websocket:
+        _recv_of_type(websocket, "server_status")
+        ws_client.post(f"/api/heats/{heat['id']}/open-ready-check")
+
+        found = {}
+        for _ in range(80):
+            message = websocket.receive_json()
+            if (
+                message.get("type") == "heat_state"
+                and message.get("heat_id") == heat["id"]
+            ):
+                found.setdefault("heat_state", message)
+            elif (
+                message.get("type") == "ready_update"
+                and message.get("heat_id") == heat["id"]
+            ):
+                found.setdefault("ready_update", message)
+            elif (
+                message.get("type") == "prova_state"
+                and message.get("prova_id") == heat["prova_id"]
+            ):
+                found.setdefault("prova_state", message)
+            if len(found) == 3:
+                break
+
+        assert set(found) == {"heat_state", "ready_update", "prova_state"}
+        assert found["heat_state"]["event_id"] == event["id"]
+        assert found["heat_state"]["payload"]["event_id"] == event["id"]
+        assert found["ready_update"]["event_id"] == event["id"]
+        assert found["prova_state"]["event_id"] == event["id"]
+
+
+def test_ws_subscribe_filters_other_events(ws_client):
+    event_a = _create_event(ws_client, name="Evento WS A")
+    heat_a = _create_heat(ws_client, event_a["id"])
+    event_b = _create_event(ws_client, name="Evento WS B")
+    heat_b = _create_heat(ws_client, event_b["id"])
+
+    with ws_client.websocket_connect("/ws") as websocket:
+        _recv_of_type(websocket, "server_status")
+        websocket.send_json(
+            {"type": "subscribe", "event_id": event_a["id"]}
+        )
+        subscribed = _recv_of_type(websocket, "subscribed")
+        assert subscribed["event_id"] == event_a["id"]
+
+        ws_client.post(f"/api/heats/{heat_b['id']}/open-ready-check")
+        ws_client.post(f"/api/heats/{heat_a['id']}/open-ready-check")
+
+        received = []
+        for _ in range(80):
+            message = websocket.receive_json()
+            received.append(message)
+            if (
+                message.get("type") == "heat_state"
+                and message.get("heat_id") == heat_a["id"]
+            ):
+                break
+
+        assert any(
+            message.get("type") == "heat_state"
+            and message.get("heat_id") == heat_a["id"]
+            for message in received
+        )
+        assert all(
+            message.get("heat_id") != heat_b["id"] for message in received
+        )
+        assert all(
+            message.get("event_id") != event_b["id"]
+            for message in received
+        )
+
+
+def test_ws_without_subscribe_receives_all_events(ws_client):
+    event_a = _create_event(ws_client, name="Evento WS tudo A")
+    heat_a = _create_heat(ws_client, event_a["id"])
+    event_b = _create_event(ws_client, name="Evento WS tudo B")
+    heat_b = _create_heat(ws_client, event_b["id"])
+
+    with ws_client.websocket_connect("/ws") as websocket:
+        _recv_of_type(websocket, "server_status")
+        ws_client.post(f"/api/heats/{heat_a['id']}/open-ready-check")
+        ws_client.post(f"/api/heats/{heat_b['id']}/open-ready-check")
+
+        seen = set()
+        for _ in range(120):
+            message = websocket.receive_json()
+            if message.get("type") == "heat_state":
+                seen.add(message.get("heat_id"))
+            if {heat_a["id"], heat_b["id"]} <= seen:
+                break
+        assert {heat_a["id"], heat_b["id"]} <= seen
+
+
+def test_ws_subscribe_unknown_event_errors(ws_client):
+    with ws_client.websocket_connect("/ws") as websocket:
+        _recv_of_type(websocket, "server_status")
+        websocket.send_json(
+            {"type": "subscribe", "event_id": "inexistente"}
+        )
+        error = _recv_of_type(websocket, "error")
+        assert error["message"] == "evento_nao_encontrado"

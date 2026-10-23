@@ -14,7 +14,7 @@ async def _get_event(session: AsyncSession, event_id: str) -> Event:
 async def _get_heat(session: AsyncSession, heat_id: str) -> Heat:
     heat = await session.get(Heat, heat_id)
     if heat is None:
-        raise HTTPException(status_code=404, detail="prova_nao_encontrada")
+        raise HTTPException(status_code=404, detail="bateria_nao_encontrada")
     return heat
 
 

@@ -66,6 +66,9 @@ class Prova(Base):
     distance_m: Mapped[int | None] = mapped_column(Integer, nullable=True)
     category: Mapped[str | None] = mapped_column(String, nullable=True)
     naipe: Mapped[str | None] = mapped_column(String, nullable=True)
+    mixed_ranking: Mapped[str] = mapped_column(
+        String, default="both", nullable=False, server_default=text("'both'")
+    )
     consolidate_results: Mapped[bool] = mapped_column(
         Boolean, default=True, nullable=False
     )
@@ -127,6 +130,9 @@ class Athlete(Base):
     name: Mapped[str] = mapped_column(String, nullable=False)
     naipe: Mapped[str] = mapped_column(String, nullable=False)
     category: Mapped[str | None] = mapped_column(String, nullable=True)
+    registration_code: Mapped[str | None] = mapped_column(
+        String, nullable=True
+    )
     created_at: Mapped[float] = mapped_column(Float, nullable=False)
     updated_at: Mapped[float | None] = mapped_column(Float, nullable=True)
 
@@ -139,10 +145,11 @@ class Athlete(Base):
         Index("ix_athlete_event_team", "event_id", "team_id"),
         Index("ix_athlete_event_name", "event_id", "name"),
         Index(
-            "uq_athlete_event_name_team",
+            "uq_athlete_event_name_team_code",
             text("event_id"),
             text("name COLLATE NOCASE"),
             text("COALESCE(team_id, '')"),
+            text("COALESCE(registration_code, '')"),
             unique=True,
         ),
     )

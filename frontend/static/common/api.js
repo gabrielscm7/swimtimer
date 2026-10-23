@@ -1,7 +1,7 @@
 export async function apiFetch(path, options = {}) {
   const response = await fetch(path, {
-    headers: { "Content-Type": "application/json" },
     ...options,
+    headers: { "Content-Type": "application/json", ...(options.headers || {}) },
   });
   if (!response.ok) {
     let detail = response.statusText;
@@ -17,10 +17,10 @@ export async function apiFetch(path, options = {}) {
   return response.json();
 }
 
-export async function api(method, path, body) {
+export async function api(method, path, body, headers = {}) {
   const options = {
     method,
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...headers },
   };
   if (body !== undefined && body !== null) {
     options.body = JSON.stringify(body);

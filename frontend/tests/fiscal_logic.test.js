@@ -51,3 +51,17 @@ test("applyLaneUpdate mescla campos no objeto da raia", () => {
   assert.equal(lane.status, "finished");
   assert.equal(lane.laps, 3);
 });
+
+test("codigos de bateria sao terminais durante a transicao", () => {
+  for (const message of [
+    "bateria_nao_ativa",
+    "bateria_nao_iniciada",
+    "bateria_nao_encontrada",
+    "bateria_nao_esta_em_ready_check",
+    "bateria_nao_esta_scheduled",
+  ]) {
+    assert.equal(isTerminalError({ message }), true, message);
+  }
+  // Nomes antigos continuam reconhecidos.
+  assert.equal(isTerminalError({ message: "prova_nao_ativa" }), true);
+});

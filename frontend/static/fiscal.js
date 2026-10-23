@@ -13,6 +13,7 @@ const REGISTER_GUARD_MS = 12000;
 
 const { isTerminalError, applyLaneUpdate } = window.FiscalLogic;
 const { newOpId } = window.ClockLogic;
+const { heatsSorted } = window.SequenceLogic;
 
 const els = {
   offlineBanner: document.getElementById("offline-banner"),
@@ -361,14 +362,7 @@ function provaOfHeat(event, heat) {
 }
 
 function pickConfigHeat(event) {
-  const provaOrder = (heat) => {
-    const prova = provaOfHeat(event, heat);
-    return prova ? prova.order_num : 0;
-  };
-  const heats = [...event.heats].sort(
-    (a, b) =>
-      provaOrder(a) - provaOrder(b) || a.order_num - b.order_num
-  );
+  const heats = heatsSorted(event.heats);
   return (
     heats.find((heat) => heat.status === "active") ||
     heats.find((heat) => heat.status === "ready_check") ||
@@ -873,7 +867,7 @@ function hasNextBattery() {
   if (!eventDetail || !selection) return false;
   return eventDetail.heats.some(
     (heat) =>
-      heat.order_num > currentHeat.order_num &&
+      heat.event_seq > currentHeat.event_seq &&
       heat.status !== "finished" &&
       heat.heat_lanes.some(
         (lane) => lane.lane_number === selection.lane_number && lane.participant_name
@@ -883,9 +877,10 @@ function hasNextBattery() {
 
 function nextBattery() {
   if (!eventDetail || !selection) return;
-  const heats = [...eventDetail.heats].sort((a, b) => a.order_num - b.order_num);
+  const heats = heatsSorted(eventDetail.heats);
   const next = heats.find(
-    (heat) => heat.order_num > currentHeat.order_num && heat.status !== "finished"
+    (heat) =>
+      heat.event_seq > currentHeat.event_seq && heat.status !== "finished"
   );
   if (!next) return;
   const lane = next.heat_lanes.find(

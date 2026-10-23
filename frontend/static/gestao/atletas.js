@@ -1,8 +1,15 @@
 import { api } from "../common/api.js";
 import { escapeHtml } from "../common/format.js";
-import { showToast } from "../common/ui.js";
+import { showFeedback, showToast } from "../common/ui.js";
+import { isOverrideError, promptSupervisorOverride } from "./override.js";
 import { els, state } from "./state.js";
-import { renderAll, setFieldError, teamOptions, withButton } from "./ui.js";
+import {
+  refresh,
+  renderAll,
+  setFieldError,
+  teamOptions,
+  withButton,
+} from "./ui.js";
 
 
 async function fetchAllAthletes() {
@@ -72,6 +79,12 @@ function athleteFormHTML() {
           <input id="af-category" type="text" maxlength="60" placeholder="Ex: SUB-12"
             value="${escapeHtml(athlete ? athlete.category || "" : "")}" />
         </div>
+        <div>
+          <label>Código de registro (homônimos)</label>
+          <input id="af-registration" type="text" maxlength="40"
+            placeholder="Opcional — ex: A-001"
+            value="${escapeHtml(athlete ? athlete.registration_code || "" : "")}" />
+        </div>
       </div>
       <div class="actions">
         <button class="primary" data-action="confirm-athlete">${editing ? "Salvar" : "Cadastrar"}</button>
@@ -122,7 +135,7 @@ function athleteImportHTML() {
       </div>
       <div class="import-drop" id="athlete-import-drop">
         <p>Arraste o arquivo aqui ou selecione abaixo.</p>
-        <p class="muted">CSV ou XLSX · colunas NOME, EQUIPE, NAIPE, CATEGORIA · até 2 MB e 1000 linhas</p>
+        <p class="muted">CSV ou XLSX · colunas NOME, EQUIPE, NAIPE, CATEGORIA e REGISTRO (opcional) · até 2 MB e 1000 linhas</p>
         <label class="file-btn">Selecionar arquivo
           <input id="athlete-import-input" type="file" accept=".csv,.xlsx" hidden />
         </label>
@@ -156,6 +169,7 @@ function athleteResultsHTML() {
         <td>${escapeHtml(athlete.team_name || "—")}</td>
         <td>${GestaoLogic.naipeLabel(athlete.naipe)}</td>
         <td>${escapeHtml(athlete.category || "—")}</td>
+        <td>${escapeHtml(athlete.registration_code || "—")}</td>
         <td class="row-actions">
           <button data-action="edit-athlete" data-id="${athlete.id}" title="Editar">✏️</button>
           <button class="danger" data-action="delete-athlete" data-id="${athlete.id}" title="Excluir">🗑</button>
@@ -165,7 +179,7 @@ function athleteResultsHTML() {
     .join("");
   return `
     <table class="data-table">
-      <thead><tr><th>Nome</th><th>Equipe</th><th>Naipe</th><th>Categoria</th><th></th></tr></thead>
+      <thead><tr><th>Nome</th><th>Equipe</th><th>Naipe</th><th>Categoria</th><th>Registro</th><th></th></tr></thead>
       <tbody>${rows}</tbody>
     </table>
     <div class="pagination-row">
@@ -339,15 +353,49 @@ async function saveAthleteForm(button) {
     category:
       document.getElementById("af-category").value.trim() || null,
     team_id: document.getElementById("af-team").value || null,
+    registration_code:
+      document.getElementById("af-registration").value.trim() || null,
   };
-  await withButton(button, async () => {
-    if (state.athleteForm.mode === "edit") {
-      await api("PATCH", `/api/athletes/${state.athleteForm.id}`, payload);
-    } else {
+  if (state.athleteForm.mode !== "edit") {
+    await withButton(button, async () => {
       await api("POST", `/api/events/${eventId}/athletes`, payload);
-    }
+      state.athleteForm = null;
+    });
+    return;
+  }
+
+  const athleteId = state.athleteForm.id;
+  const send = (extra = {}, headers = {}) =>
+    api(
+      "PATCH",
+      `/api/athletes/${athleteId}`,
+      { ...payload, ...extra },
+      headers
+    );
+  showFeedback(button, "loading");
+  try {
+    await send();
     state.athleteForm = null;
-  });
+    showFeedback(button, "success");
+    setTimeout(refresh, 400);
+  } catch (error) {
+    showFeedback(button, "error");
+    const message = GestaoLogic.gestaoErrorMessage(error);
+    showToast(message, true);
+    if (!isOverrideError(error)) return;
+    promptSupervisorOverride({
+      message,
+      onConfirm: async (pin, reason) => {
+        await send(
+          { force: true, override_reason: reason },
+          { "X-Operator-Pin": pin }
+        );
+        state.athleteForm = null;
+        await refresh();
+        showToast("Exceção autorizada");
+      },
+    });
+  }
 }
 
 

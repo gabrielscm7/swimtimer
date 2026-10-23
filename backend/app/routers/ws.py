@@ -2,7 +2,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from sqlalchemy import select
 
 from .. import database
-from ..models import Heat, Prova
+from ..models import Event, Heat, Prova
 from ..services import lane_actions
 from ..services.broadcast import (
     _broadcast_server_status,
@@ -19,6 +19,24 @@ async def _handle_ws_message(data: dict, websocket: WebSocket) -> None:
     message_type = data.get("type")
     if message_type == "ping":
         await manager.send_to(websocket, {"type": "pong"})
+        return
+    if message_type == "subscribe":
+        event_id = data.get("event_id") or None
+        if event_id:
+            async with database.AsyncSessionLocal() as session:
+                if await session.get(Event, event_id) is None:
+                    await manager.send_to(
+                        websocket,
+                        {
+                            "type": "error",
+                            "message": "evento_nao_encontrado",
+                        },
+                    )
+                    return
+        manager.subscribe(websocket, event_id)
+        await manager.send_to(
+            websocket, {"type": "subscribed", "event_id": event_id}
+        )
         return
     if message_type == "finish":
         handler = lane_actions._do_finish

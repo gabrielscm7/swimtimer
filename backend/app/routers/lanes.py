@@ -7,13 +7,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..core.errors import LaneActionError
 from ..core.locks import _heat_guard
 from ..database import get_db
-from ..models import Athlete, LapEvent, Team
+from ..models import Athlete, HeatLane, LapEvent, Team
 from ..schemas import LaneActionRequest, LaneUpdate
 from ..services.broadcast import (
     _broadcast_heat,
     _broadcast_ready,
     _broadcast_server_status,
 )
+from ..services.inscricao import enforce_heat_inscricao
 from ..services.lane_actions import (
     _client_ip,
     _do_finish,
@@ -31,6 +32,7 @@ router = APIRouter()
 async def update_lane(
     lane_id: str,
     payload: LaneUpdate,
+    request: Request,
     session: AsyncSession = Depends(get_db),
 ) -> dict:
     lane = await _get_lane(session, lane_id)
@@ -39,16 +41,41 @@ async def update_lane(
         lane = await _get_lane(session, lane_id)
         heat = await _get_heat(session, lane.heat_id)
         if heat.status not in ("scheduled", "ready_check"):
-            raise HTTPException(status_code=409, detail="prova_ja_iniciada")
-        data = payload.model_dump(exclude_unset=True)
-        if data.get("athlete_id") is not None:
-            athlete = await session.get(Athlete, data["athlete_id"])
-            if athlete is None or athlete.event_id != heat.event_id:
-                raise HTTPException(
-                    status_code=404, detail="atleta_nao_encontrado"
-                )
-            data["participant_name"] = athlete.name
-            data["team_id"] = athlete.team_id
+            raise HTTPException(status_code=409, detail="bateria_ja_iniciada")
+        data = payload.model_dump(
+            exclude_unset=True, exclude={"force", "override_reason"}
+        )
+        if "athlete_id" in data:
+            if data["athlete_id"] is not None:
+                athlete = await session.get(Athlete, data["athlete_id"])
+                if athlete is None or athlete.event_id != heat.event_id:
+                    raise HTTPException(
+                        status_code=404, detail="atleta_nao_encontrado"
+                    )
+            result = await session.execute(
+                select(HeatLane).where(HeatLane.heat_id == heat.id)
+            )
+            prospective = {
+                item.lane_number: item.athlete_id
+                for item in result.scalars().all()
+            }
+            prospective[lane.lane_number] = data.get("athlete_id")
+            await enforce_heat_inscricao(
+                session,
+                heat=heat,
+                final_athlete_ids=[
+                    athlete_id
+                    for athlete_id in prospective.values()
+                    if athlete_id
+                ],
+                force=payload.force,
+                override_reason=payload.override_reason,
+                request=request,
+                lane_id=lane.id,
+            )
+            if data["athlete_id"] is not None:
+                data["participant_name"] = athlete.name
+                data["team_id"] = athlete.team_id
         if data.get("team_id") is not None:
             team = await session.get(Team, data["team_id"])
             if team is None or team.event_id != heat.event_id:
@@ -76,7 +103,7 @@ async def lane_ready(
         heat = await _get_heat(session, lane.heat_id)
         if heat.status != "ready_check":
             raise HTTPException(
-                status_code=400, detail="prova_nao_esta_em_ready_check"
+                status_code=400, detail="bateria_nao_esta_em_ready_check"
             )
         lane.status = "ready"
         await session.commit()
@@ -136,7 +163,7 @@ async def lane_dq(
         lane = await _get_lane(session, lane_id)
         heat = await _get_heat(session, lane.heat_id)
         if heat.status != "active":
-            raise HTTPException(status_code=400, detail="prova_nao_ativa")
+            raise HTTPException(status_code=400, detail="bateria_nao_ativa")
         now = time.time()
         lane.status = "dq"
         all_finished = await _maybe_finish_heat(session, heat)

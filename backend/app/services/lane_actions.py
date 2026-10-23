@@ -181,15 +181,15 @@ async def _do_finish(
             return cached
         heat = await session.get(Heat, heat_id)
         if heat is None:
-            raise LaneActionError(404, "prova_nao_encontrada")
+            raise LaneActionError(404, "bateria_nao_encontrada")
         if heat.heat_type != "bateria":
             raise LaneActionError(400, "nao_e_bateria")
         if lane.finish_at is not None:
             raise LaneActionError(409, "ja_finalizou")
         if heat.status != "active":
-            raise LaneActionError(400, "prova_nao_ativa")
+            raise LaneActionError(400, "bateria_nao_ativa")
         if heat.started_at is None:
-            raise LaneActionError(400, "prova_nao_iniciada")
+            raise LaneActionError(400, "bateria_nao_iniciada")
 
         effective_ts, received_at, late, duration_s = _effective_time(
             heat, _coerce_ts(client_ts)
@@ -272,11 +272,11 @@ async def _do_lap(
             return cached
         heat = await session.get(Heat, heat_id)
         if heat is None:
-            raise LaneActionError(404, "prova_nao_encontrada")
+            raise LaneActionError(404, "bateria_nao_encontrada")
         if heat.heat_type != "maratona":
             raise LaneActionError(400, "nao_e_maratona")
         if heat.status != "active":
-            raise LaneActionError(400, "prova_nao_ativa")
+            raise LaneActionError(400, "bateria_nao_ativa")
 
         effective_ts, received_at, late, _duration_s = _effective_time(
             heat, _coerce_ts(client_ts)

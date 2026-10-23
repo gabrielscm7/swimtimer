@@ -35,6 +35,9 @@ class Settings(BaseSettings):
     MAX_IMPORT_ROWS: int = 1000
     MIN_LAP_INTERVAL_S: float = 5.0
     LATE_AFTER_S: float = 2.0
+    # PIN do supervisor para autorizar excecoes de inscricao (force).
+    # Se nao configurado, nenhum override e aceito.
+    OPERATOR_PIN: str | None = None
 
     @property
     def frontend_dir(self) -> Path:

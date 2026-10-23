@@ -5,7 +5,9 @@ import unicodedata
 from fastapi import HTTPException
 from openpyxl import load_workbook
 
-_IMPORT_COLUMNS = ("NOME", "EQUIPE", "NAIPE", "CATEGORIA")
+_REQUIRED_COLUMNS = ("NOME", "EQUIPE", "NAIPE", "CATEGORIA")
+# REGISTRO e opcional para manter compatibilidade com planilhas antigas.
+_IMPORT_COLUMNS = (*_REQUIRED_COLUMNS, "REGISTRO")
 
 
 def _strip_accents(value: str) -> str:

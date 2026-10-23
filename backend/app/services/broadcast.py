@@ -14,15 +14,19 @@ def _heat_state_message(heat_payload: dict) -> dict:
         "type": "heat_state",
         "scope": "heat",
         "heat_id": heat_payload["id"],
+        "event_id": heat_payload.get("event_id"),
         "payload": heat_payload,
     }
 
 
-def _ready_update_message(heat_id: str, ready_payload: dict) -> dict:
+def _ready_update_message(
+    heat_id: str, ready_payload: dict, event_id: str | None = None
+) -> dict:
     return {
         "type": "ready_update",
         "scope": "heat",
         "heat_id": heat_id,
+        "event_id": event_id,
         "payload": ready_payload,
     }
 
@@ -32,6 +36,7 @@ def _prova_state_message(prova_payload: dict) -> dict:
         "type": "prova_state",
         "scope": "prova",
         "prova_id": prova_payload["id"],
+        "event_id": prova_payload.get("event_id"),
         "payload": prova_payload,
     }
 
@@ -72,4 +77,8 @@ async def _broadcast_heat(session: AsyncSession, heat: Heat) -> None:
 
 async def _broadcast_ready(session: AsyncSession, heat: Heat) -> None:
     lanes = await _heat_lanes(session, heat.id)
-    await manager.broadcast(_ready_update_message(heat.id, _ready_payload(lanes)))
+    await manager.broadcast(
+        _ready_update_message(
+            heat.id, _ready_payload(lanes), heat.event_id
+        )
+    )

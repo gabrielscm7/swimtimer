@@ -21,6 +21,7 @@ from ..services.broadcast import (
     _prova_state_message,
     manager,
 )
+from ..services.inscricao import enforce_heat_inscricao
 from ..services.lane_actions import (
     _anchor_heat,
     _client_ip,
@@ -145,7 +146,7 @@ async def update_heat(
         session.expire_all()
         heat = await _get_heat(session, heat_id)
         if heat.status not in ("scheduled", "ready_check"):
-            raise HTTPException(status_code=409, detail="prova_ja_iniciada")
+            raise HTTPException(status_code=409, detail="bateria_ja_iniciada")
         data = payload.model_dump(exclude_unset=True)
         new_order = data.get("order_num")
         if new_order is not None and new_order != heat.order_num:
@@ -192,7 +193,7 @@ async def reorder_heats(
             heat.status not in ("scheduled", "ready_check")
             for heat in heats
         ):
-            raise HTTPException(status_code=409, detail="prova_ja_iniciada")
+            raise HTTPException(status_code=409, detail="bateria_ja_iniciada")
 
         offset = 100000
         await session.execute(
@@ -226,7 +227,7 @@ async def delete_heat(
         heat = await _get_heat(session, heat_id)
         if heat.status != "scheduled":
             raise HTTPException(
-                status_code=409, detail="prova_nao_esta_scheduled"
+                status_code=409, detail="bateria_nao_esta_scheduled"
             )
         lane_ids = select(HeatLane.id).where(HeatLane.heat_id == heat_id)
         await session.execute(
@@ -259,7 +260,7 @@ async def open_ready_check(
         session.expire_all()
         heat = await _get_heat(session, heat_id)
         if heat.status not in ("scheduled", "ready_check"):
-            raise HTTPException(status_code=409, detail="prova_nao_esta_scheduled")
+            raise HTTPException(status_code=409, detail="bateria_nao_esta_scheduled")
         heat.status = "ready_check"
         await _sync_prova_status(session, heat.prova_id)
         await session.commit()
@@ -281,7 +282,7 @@ async def start_heat(
         direct_start = heat.status == "scheduled" and heat.heat_type == "maratona"
         if heat.status != "ready_check" and not direct_start:
             raise HTTPException(
-                status_code=400, detail="prova_nao_esta_em_ready_check"
+                status_code=400, detail="bateria_nao_esta_em_ready_check"
             )
 
         lanes = await _heat_lanes(session, heat.id)
@@ -333,7 +334,7 @@ async def abort_heat(
         session.expire_all()
         heat = await _get_heat(session, heat_id)
         if heat.status not in ("ready_check", "active"):
-            raise HTTPException(status_code=409, detail="prova_nao_esta_ativa")
+            raise HTTPException(status_code=409, detail="bateria_nao_esta_ativa")
         now = time.time()
         heat.status = "scheduled"
         heat.started_at = None
@@ -374,7 +375,7 @@ async def finish_heat(
         if heat.status == "finished":
             return await _heat_payload(session, heat)
         if heat.status == "scheduled":
-            raise HTTPException(status_code=409, detail="prova_nao_iniciada")
+            raise HTTPException(status_code=409, detail="bateria_nao_iniciada")
         now = time.time()
         heat.status = "finished"
         heat.finished_at = now
@@ -400,6 +401,7 @@ async def finish_heat(
 async def configure_lanes(
     heat_id: str,
     payload: HeatLaneConfigRequest,
+    request: Request,
     session: AsyncSession = Depends(get_db),
 ) -> dict:
     numbers = [item.lane_number for item in payload.lanes]
@@ -410,11 +412,32 @@ async def configure_lanes(
         session.expire_all()
         heat = await _get_heat(session, heat_id)
         if heat.status not in ("scheduled", "ready_check"):
-            raise HTTPException(status_code=409, detail="prova_ja_iniciada")
+            raise HTTPException(status_code=409, detail="bateria_ja_iniciada")
 
         existing = {
             lane.lane_number: lane for lane in await _heat_lanes(session, heat.id)
         }
+
+        # Estado final da bateria apos aplicar o payload: a validacao precisa
+        # considerar trocas de raia dentro da mesma bateria.
+        prospective = {
+            number: lane.athlete_id for number, lane in existing.items()
+        }
+        for item in payload.lanes:
+            prospective[item.lane_number] = item.athlete_id
+        await enforce_heat_inscricao(
+            session,
+            heat=heat,
+            final_athlete_ids=[
+                athlete_id
+                for athlete_id in prospective.values()
+                if athlete_id
+            ],
+            force=payload.force,
+            override_reason=payload.override_reason,
+            request=request,
+        )
+
         for item in payload.lanes:
             athlete = None
             if item.athlete_id is not None:

@@ -247,3 +247,64 @@ async def test_export_round_trip(client):
     text = response.text.lstrip("\ufeff")
     assert "NOME,EQUIPE,NAIPE,CATEGORIA" in text
     assert "Ana,Leões,F,SUB-12" in text
+
+
+@pytest.mark.asyncio
+async def test_import_registration_code_disambiguates_homonyms(client):
+    event = await create_event(client)
+    content = (
+        "NOME,EQUIPE,NAIPE,CATEGORIA,REGISTRO\n"
+        "João Silva,Leões,M,SUB-12,A-001\n"
+        "João Silva,Leões,M,SUB-12,A-002\n"
+    )
+    response = await _import(
+        client, event["id"], "atletas.csv", content.encode(), "text/csv"
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["created_athletes"] == 2
+    assert body["errors"] == []
+
+    listing = (
+        await client.get(
+            f"/api/events/{event['id']}/athletes", params={"limit": 200}
+        )
+    ).json()
+    codes = sorted(
+        item["registration_code"] for item in listing["items"]
+    )
+    assert codes == ["A-001", "A-002"]
+
+
+@pytest.mark.asyncio
+async def test_import_without_registration_column_still_works(client):
+    event = await create_event(client)
+    content = "NOME,EQUIPE,NAIPE,CATEGORIA\nAna,Leões,F,SUB-12\n"
+    response = await _import(
+        client, event["id"], "atletas.csv", content.encode(), "text/csv"
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["created_athletes"] == 1
+
+
+@pytest.mark.asyncio
+async def test_template_and_export_include_registration_code(client):
+    event = await create_event(client)
+    base = f"/api/events/{event['id']}/athletes/import-template"
+    csv_response = await client.get(base, params={"format": "csv"})
+    assert "REGISTRO" in csv_response.text
+    assert "A-001" in csv_response.text
+
+    team = await create_team(client, event["id"], "Leões")
+    await create_athlete(
+        client,
+        event["id"],
+        name="Ana",
+        naipe="F",
+        team_id=team["id"],
+        registration_code="C-007",
+    )
+    export = await client.get(f"/api/events/{event['id']}/athletes/export")
+    text = export.text.lstrip("\ufeff")
+    assert "REGISTRO" in text
+    assert "Ana,Leões,F,,C-007" in text

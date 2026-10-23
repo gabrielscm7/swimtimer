@@ -90,6 +90,42 @@ async def _lane_payload(
     )
 
 
+async def _heat_sequences(
+    session: AsyncSession, event_ids: set[str]
+) -> dict[str, dict]:
+    """Posicao canonica de cada bateria no evento.
+
+    A sequencia global ordena por (prova.order_num, heat.order_num) e e a
+    unica forma correta de "proxima bateria" — order_num isolado reinicia a
+    cada prova e mistura provas.
+    """
+    sequences: dict[str, dict] = {}
+    for event_id in event_ids:
+        result = await session.execute(
+            select(Heat.prova_id, func.count(Heat.id))
+            .where(Heat.event_id == event_id)
+            .group_by(Heat.prova_id)
+        )
+        heats_in_prova = {prova_id: count for prova_id, count in result.all()}
+        result = await session.execute(
+            select(Heat, Prova)
+            .join(Prova, Heat.prova_id == Prova.id)
+            .where(Heat.event_id == event_id)
+            .order_by(Prova.order_num, Heat.order_num)
+        )
+        index_in_prova: dict[str, int] = {}
+        for event_seq, (heat, prova) in enumerate(result.all(), start=1):
+            index_in_prova[prova.id] = index_in_prova.get(prova.id, 0) + 1
+            sequences[heat.id] = {
+                "event_seq": event_seq,
+                "prova_order_num": prova.order_num,
+                "prova_name": prova.name,
+                "heat_index_in_prova": index_in_prova[prova.id],
+                "heats_in_prova": heats_in_prova.get(prova.id, 0),
+            }
+    return sequences
+
+
 async def _heats_payload(
     session: AsyncSession, heats: list[Heat]
 ) -> list[dict]:
@@ -98,6 +134,7 @@ async def _heats_payload(
         return []
 
     event_ids = {heat.event_id for heat in heats}
+    sequences = await _heat_sequences(session, event_ids)
     result = await session.execute(
         select(Event).where(Event.id.in_(event_ids))
     )
@@ -161,6 +198,7 @@ async def _heats_payload(
         pool_length_m = event.pool_length_m if event else 0
         team_map = teams_by_event.get(heat.event_id, {})
         lanes = lanes_by_heat.get(heat.id, [])
+        sequence = sequences.get(heat.id, {})
         payloads.append(
             {
                 "id": heat.id,
@@ -168,6 +206,11 @@ async def _heats_payload(
                 "prova_id": heat.prova_id,
                 "name": heat.name,
                 "order_num": heat.order_num,
+                "event_seq": sequence.get("event_seq"),
+                "prova_order_num": sequence.get("prova_order_num"),
+                "prova_name": sequence.get("prova_name"),
+                "heat_index_in_prova": sequence.get("heat_index_in_prova"),
+                "heats_in_prova": sequence.get("heats_in_prova"),
                 "heat_type": heat.heat_type,
                 "distance_m": heat.distance_m,
                 "duration_s": heat.duration_s,
@@ -251,6 +294,7 @@ async def _provas_payload(
                 "distance_m": prova.distance_m,
                 "category": prova.category,
                 "naipe": prova.naipe,
+                "mixed_ranking": prova.mixed_ranking,
                 "consolidate_results": prova.consolidate_results,
                 "classification_criterion": prova.classification_criterion,
                 "status": prova_status([heat.status for heat in prova_heats]),
@@ -291,6 +335,21 @@ async def _classification_payload(
         for lane in result.scalars().all():
             lane_map[lane.heat_id].append(lane)
 
+    athlete_ids = {
+        lane.athlete_id
+        for lanes in lane_map.values()
+        for lane in lanes
+        if lane.athlete_id
+    }
+    naipe_by_athlete: dict[str, str | None] = {}
+    if athlete_ids:
+        result = await session.execute(
+            select(Athlete.id, Athlete.naipe).where(
+                Athlete.id.in_(athlete_ids)
+            )
+        )
+        naipe_by_athlete = {athlete_id: naipe for athlete_id, naipe in result.all()}
+
     event = await session.get(Event, prova.event_id)
     team_map = await _team_map(session, prova.event_id)
     heat_dicts = [
@@ -304,6 +363,9 @@ async def _classification_payload(
                 {
                     "id": lane.id,
                     "lane_number": lane.lane_number,
+                    "naipe": naipe_by_athlete.get(lane.athlete_id)
+                    if lane.athlete_id
+                    else None,
                     "participant_name": lane.participant_name,
                     "team_id": lane.team_id,
                     "status": lane.status,
@@ -319,6 +381,7 @@ async def _classification_payload(
         heats=heat_dicts,
         team_map=team_map,
         pool_distance_m=event.pool_length_m if event else None,
+        mixed_ranking=prova.mixed_ranking,
     )
     return {
         "prova_id": prova.id,
@@ -328,10 +391,67 @@ async def _classification_payload(
         "status": classification["status"],
         "consolidate_results": prova.consolidate_results,
         "classification_criterion": prova.classification_criterion,
+        "mixed_ranking": classification["mixed_ranking"],
         "is_provisional": classification["is_provisional"],
         "standings": classification["standings"],
+        "standings_by_naipe": classification["standings_by_naipe"],
         "excluded": classification["excluded"],
         "battery_results": classification["battery_results"],
+    }
+
+
+async def _prova_summary_payload(
+    session: AsyncSession, prova: Prova
+) -> dict:
+    """Resumo enxuto de uma prova: cabecalho, progresso, baterias e ranking."""
+    heats = await _prova_heats(session, prova.id)
+    sequences = await _heat_sequences(session, {prova.event_id})
+    classification = await _classification_payload(session, prova)
+    finished = sum(1 for heat in heats if heat.status == "finished")
+    return {
+        "id": prova.id,
+        "event_id": prova.event_id,
+        "name": prova.name,
+        "order_num": prova.order_num,
+        "stroke": prova.stroke,
+        "distance_m": prova.distance_m,
+        "category": prova.category,
+        "naipe": prova.naipe,
+        "mixed_ranking": prova.mixed_ranking,
+        "consolidate_results": prova.consolidate_results,
+        "classification_criterion": prova.classification_criterion,
+        "status": classification["status"],
+        "heats_finished": finished,
+        "heat_count": len(heats),
+        "heats": [
+            {
+                "id": heat.id,
+                "name": heat.name,
+                "order_num": heat.order_num,
+                "event_seq": sequences.get(heat.id, {}).get("event_seq"),
+                "heat_index_in_prova": sequences.get(heat.id, {}).get(
+                    "heat_index_in_prova"
+                ),
+                "heats_in_prova": sequences.get(heat.id, {}).get(
+                    "heats_in_prova"
+                ),
+                "heat_type": heat.heat_type,
+                "distance_m": heat.distance_m,
+                "duration_s": heat.duration_s,
+                "status": heat.status,
+                "started_at": heat.started_at,
+                "finished_at": heat.finished_at,
+            }
+            for heat in heats
+        ],
+        "classification": {
+            "status": classification["status"],
+            "mixed_ranking": classification["mixed_ranking"],
+            "is_provisional": classification["is_provisional"],
+            "standings": classification["standings"],
+            "standings_by_naipe": classification["standings_by_naipe"],
+            "excluded": classification["excluded"],
+        },
     }
 
 
@@ -379,6 +499,7 @@ async def _event_payload(
                 "distance_m": prova.distance_m,
                 "category": prova.category,
                 "naipe": prova.naipe,
+                "mixed_ranking": prova.mixed_ranking,
                 "consolidate_results": prova.consolidate_results,
                 "classification_criterion": prova.classification_criterion,
                 "status": prova.status,

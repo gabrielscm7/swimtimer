@@ -1,7 +1,10 @@
 (function (root) {
   function athleteOptionLabel(athlete) {
     const team = athlete.team_name || "Sem equipe";
-    return `${athlete.name} — ${team}`;
+    const code = athlete.registration_code
+      ? ` · ${athlete.registration_code}`
+      : "";
+    return `${athlete.name} — ${team}${code}`;
   }
 
   function athleteLabelIndex(athletes) {
@@ -15,7 +18,15 @@
   function naipeLabel(naipe) {
     if (naipe === "M") return "Masculino";
     if (naipe === "F") return "Feminino";
+    if (naipe === "MISTO") return "Misto";
     return "—";
+  }
+
+  function mixedRankingLabel(value) {
+    if (value === "overall") return "Geral";
+    if (value === "by_naipe") return "Por naipe";
+    if (value === "both") return "Geral + por naipe";
+    return "Geral + por naipe";
   }
 
   function paginationInfo(total, limit, offset) {
@@ -89,10 +100,32 @@
       "A nova ordem não corresponde a todos os itens. Recarregue a página e tente novamente.",
     prova_ja_iniciada:
       "Não é possível alterar: a prova ou bateria já foi iniciada.",
+    bateria_ja_iniciada:
+      "Não é possível alterar: a bateria já foi iniciada.",
+    bateria_nao_esta_scheduled:
+      "A bateria precisa estar agendada (não iniciada) para esta ação.",
+    bateria_nao_esta_em_ready_check:
+      "A bateria não está em verificação de fiscais (ready check).",
+    bateria_nao_esta_ativa: "A bateria não está em andamento.",
+    bateria_nao_iniciada: "A bateria ainda não foi iniciada.",
+    bateria_nao_encontrada: "Bateria não encontrada.",
     equipe_em_uso: "Esta equipe possui atletas ou raias vinculadas.",
     atleta_em_uso: "Este atleta está alocado em uma raia.",
     atleta_duplicado:
       "Já existe um atleta com este nome nesta equipe.",
+    naipe_incompativel:
+      "O naipe do atleta é incompatível com o naipe da prova.",
+    categoria_incompativel:
+      "A categoria do atleta é incompatível com a categoria da prova.",
+    atleta_duplicado_na_bateria:
+      "Este atleta já está inscrito nesta bateria.",
+    atleta_em_outra_bateria_ativa:
+      "Este atleta já está em uma bateria ativa (ou em verificação) de outra prova.",
+    override_reason_obrigatorio:
+      "Informe o motivo da exceção para autorizar com o PIN do supervisor.",
+    override_requer_pin_do_supervisor:
+      "O servidor não tem PIN de supervisor configurado; exceções estão desabilitadas.",
+    pin_do_supervisor_invalido: "PIN do supervisor inválido.",
     equipe_nao_encontrada: "Equipe não encontrada neste evento.",
     atleta_nao_encontrado: "Atleta não encontrado neste evento.",
     naipe_invalido: "Naipe inválido: use Masculino ou Feminino.",
@@ -120,6 +153,14 @@
       const columns = key.slice("colunas_obrigatorias:".length);
       return `Colunas obrigatórias ausentes: ${columns.replace(/,/g, ", ")}.`;
     }
+    if (key.startsWith("atleta_duplicado_na_prova:")) {
+      const battery = key
+        .slice("atleta_duplicado_na_prova:".length)
+        .trim();
+      return battery
+        ? `Este atleta já está inscrito na bateria "${battery}" desta prova.`
+        : "Este atleta já está inscrito em outra bateria desta prova.";
+    }
     return key || "Erro inesperado.";
   }
 
@@ -127,6 +168,7 @@
     athleteOptionLabel,
     athleteLabelIndex,
     naipeLabel,
+    mixedRankingLabel,
     paginationInfo,
     buildAthleteQuery,
     importResultSummary,

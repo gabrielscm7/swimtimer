@@ -5,6 +5,7 @@ const {
   athleteOptionLabel,
   athleteLabelIndex,
   naipeLabel,
+  mixedRankingLabel,
   paginationInfo,
   buildAthleteQuery,
   importResultSummary,
@@ -132,4 +133,67 @@ test("gestaoErrorMessage traduz codigos conhecidos", () => {
   );
   assert.equal(gestaoErrorMessage({ message: "algo_novo" }), "algo_novo");
   assert.equal(gestaoErrorMessage(null), "Erro inesperado.");
+});
+
+test("gestaoErrorMessage traduz codigos de bateria", () => {
+  assert.match(
+    gestaoErrorMessage({ message: "bateria_ja_iniciada" }),
+    /bateria já foi iniciada/
+  );
+  assert.match(
+    gestaoErrorMessage({ message: "bateria_nao_esta_em_ready_check" }),
+    /ready check/
+  );
+});
+
+test("naipeLabel reconhece prova mista", () => {
+  assert.equal(naipeLabel("MISTO"), "Misto");
+  assert.equal(mixedRankingLabel("overall"), "Geral");
+  assert.equal(mixedRankingLabel("by_naipe"), "Por naipe");
+  assert.equal(mixedRankingLabel("both"), "Geral + por naipe");
+  assert.equal(mixedRankingLabel(undefined), "Geral + por naipe");
+});
+
+test("gestaoErrorMessage traduz erros de inscricao e override", () => {
+  assert.match(
+    gestaoErrorMessage({ message: "naipe_incompativel" }),
+    /naipe do atleta/
+  );
+  assert.match(
+    gestaoErrorMessage({ message: "categoria_incompativel" }),
+    /categoria do atleta/
+  );
+  assert.equal(
+    gestaoErrorMessage({
+      message: "atleta_duplicado_na_prova: Bateria 2",
+    }),
+    'Este atleta já está inscrito na bateria "Bateria 2" desta prova.'
+  );
+  assert.match(
+    gestaoErrorMessage({ message: "atleta_duplicado_na_bateria" }),
+    /nesta bateria/
+  );
+  assert.match(
+    gestaoErrorMessage({ message: "atleta_em_outra_bateria_ativa" }),
+    /bateria ativa/
+  );
+  assert.match(
+    gestaoErrorMessage({ message: "override_requer_pin_do_supervisor" }),
+    /PIN de supervisor/
+  );
+  assert.match(
+    gestaoErrorMessage({ message: "pin_do_supervisor_invalido" }),
+    /inválido/
+  );
+});
+
+test("athleteOptionLabel inclui codigo de registro quando existir", () => {
+  assert.equal(
+    athleteOptionLabel({
+      name: "João Silva",
+      team_name: "Leões",
+      registration_code: "A-001",
+    }),
+    "João Silva — Leões · A-001"
+  );
 });

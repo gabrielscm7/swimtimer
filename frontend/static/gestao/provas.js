@@ -33,6 +33,7 @@ function provaFormHTML() {
   const distance = prova && prova.distance_m ? prova.distance_m : "";
   const category = prova ? prova.category || "" : "";
   const naipe = prova ? prova.naipe || "" : "";
+  const mixedRanking = prova ? prova.mixed_ranking || "both" : "both";
   const consolidate = prova ? prova.consolidate_results : true;
   return `
     <div class="form-card" id="prova-form">
@@ -65,7 +66,17 @@ function provaFormHTML() {
             <option value="" ${naipe === "" ? "selected" : ""}>Não definido</option>
             <option value="F" ${naipe === "F" ? "selected" : ""}>Feminino</option>
             <option value="M" ${naipe === "M" ? "selected" : ""}>Masculino</option>
+            <option value="MISTO" ${naipe === "MISTO" ? "selected" : ""}>Misto (M e F)</option>
           </select>
+        </div>
+        <div>
+          <label>Ranking da prova</label>
+          <select id="pf-mixed-ranking">
+            <option value="both" ${mixedRanking === "both" ? "selected" : ""}>Geral + por naipe</option>
+            <option value="overall" ${mixedRanking === "overall" ? "selected" : ""}>Geral</option>
+            <option value="by_naipe" ${mixedRanking === "by_naipe" ? "selected" : ""}>Por naipe</option>
+          </select>
+          <p class="muted" style="margin:4px 0 0">Aplicado a provas mistas (M e F).</p>
         </div>
         <div>
           <label>Categoria (idade)</label>
@@ -147,16 +158,29 @@ function classificationHTML(prova, data) {
       .join("");
     body += `<p class="muted">Classificação consolidada desativada para esta prova.</p>`;
   } else {
-    const standings = data.standings || [];
-    body = `
-      <h3>Classificação geral</h3>
-      ${
-        standings.length
-          ? `<table class="data-table"><thead><tr><th>Pos.</th><th>Atleta</th><th>Equipe</th><th>Tempo</th><th>Status</th></tr></thead><tbody>${standings
-              .map((entry) => entryRow(entry, true))
-              .join("")}</tbody></table>`
-          : '<p class="muted">Nenhum resultado válido ainda.</p>'
+    const mode = data.mixed_ranking || "both";
+    const standingsTable = (entries) =>
+      entries.length
+        ? `<table class="data-table"><thead><tr><th>Pos.</th><th>Atleta</th><th>Equipe</th><th>Tempo</th><th>Status</th></tr></thead><tbody>${entries
+            .map((entry) => entryRow(entry, true))
+            .join("")}</tbody></table>`
+        : '<p class="muted">Nenhum resultado válido ainda.</p>';
+
+    const sections = [];
+    if (mode !== "by_naipe") {
+      sections.push(`
+        <h3>Classificação geral</h3>
+        ${standingsTable(data.standings || [])}`);
+    }
+    if (mode !== "overall" && data.standings_by_naipe) {
+      for (const naipe of ["M", "F"]) {
+        sections.push(`
+          <h3 style="margin-top:18px">Classificação ${GestaoLogic.naipeLabel(naipe)}</h3>
+          ${standingsTable(data.standings_by_naipe[naipe] || [])}`);
       }
+    }
+    body = `
+      ${sections.join("")}
       ${
         (data.excluded || []).length
           ? `<h3 style="margin-top:18px">Fora da classificação</h3>
@@ -296,6 +320,7 @@ async function saveProvaForm(button) {
     stroke: form.querySelector("#pf-stroke").value.trim() || null,
     category: form.querySelector("#pf-category").value.trim() || null,
     naipe: form.querySelector("#pf-naipe").value || null,
+    mixed_ranking: form.querySelector("#pf-mixed-ranking").value,
   };
   const orderInput = form.querySelector("#pf-order");
   if (orderInput && !orderInput.disabled && orderInput.value) {
@@ -394,6 +419,8 @@ function upsertProva(payload) {
     stroke: payload.stroke,
     distance_m: payload.distance_m,
     category: payload.category,
+    naipe: payload.naipe,
+    mixed_ranking: payload.mixed_ranking,
     consolidate_results: payload.consolidate_results,
     classification_criterion: payload.classification_criterion,
     status: payload.status,

@@ -303,3 +303,129 @@ async def test_delete_team_blocked_when_in_use(client):
     await client.patch(f"/api/lanes/{lane_id}", json={"team_id": None})
     deleted = await client.delete(f"/api/teams/{team['id']}")
     assert deleted.status_code == 204, deleted.text
+
+
+# --------------------------------------------------------------------------- #
+# Codigos de erro no contexto de bateria (nunca "prova")
+# --------------------------------------------------------------------------- #
+@pytest.mark.asyncio
+async def test_heat_not_found_uses_bateria_code(client):
+    response = await client.patch("/api/heats/inexistente", json={"name": "X"})
+    assert response.status_code == 404, response.text
+    assert response.json()["detail"] == "bateria_nao_encontrada"
+
+
+@pytest.mark.asyncio
+async def test_start_heat_requires_ready_check(client):
+    event = await create_event(client)
+    heat = await create_heat(client, event["id"])
+    response = await client.post(f"/api/heats/{heat['id']}/start")
+    assert response.status_code == 400, response.text
+    assert response.json()["detail"] == "bateria_nao_esta_em_ready_check"
+
+
+@pytest.mark.asyncio
+async def test_abort_scheduled_heat_uses_bateria_code(client):
+    event = await create_event(client)
+    heat = await create_heat(client, event["id"])
+    response = await client.post(f"/api/heats/{heat['id']}/abort")
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"] == "bateria_nao_esta_ativa"
+
+
+@pytest.mark.asyncio
+async def test_finish_scheduled_heat_uses_bateria_code(client):
+    event = await create_event(client)
+    heat = await create_heat(client, event["id"])
+    response = await client.post(f"/api/heats/{heat['id']}/finish")
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"] == "bateria_nao_iniciada"
+
+
+@pytest.mark.asyncio
+async def test_delete_started_heat_uses_bateria_code(client):
+    event = await create_event(client)
+    heat = await create_heat(client, event["id"])
+    await configure_lanes(client, heat["id"], [(1, "Ana")])
+    await client.post(f"/api/heats/{heat['id']}/open-ready-check")
+    response = await client.delete(f"/api/heats/{heat['id']}")
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"] == "bateria_nao_esta_scheduled"
+
+
+@pytest.mark.asyncio
+async def test_open_ready_check_on_finished_heat_uses_bateria_code(client):
+    event = await create_event(client)
+    heat = await create_heat(client, event["id"])
+    await configure_lanes(client, heat["id"], [(1, "Ana")])
+    await client.post(f"/api/heats/{heat['id']}/open-ready-check")
+    heat = (await client.get(f"/api/events/{event['id']}/heats")).json()[0]
+    await client.post(f"/api/lanes/{heat['heat_lanes'][0]['id']}/ready")
+    await client.post(f"/api/heats/{heat['id']}/start")
+    await client.post(f"/api/lanes/{heat['heat_lanes'][0]['id']}/finish")
+    response = await client.post(f"/api/heats/{heat['id']}/open-ready-check")
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"] == "bateria_nao_esta_scheduled"
+
+
+@pytest.mark.asyncio
+async def test_patch_started_heat_uses_bateria_code(client):
+    event = await create_event(client)
+    heat = await create_heat(client, event["id"])
+    await configure_lanes(client, heat["id"], [(1, "Ana")])
+    await client.post(f"/api/heats/{heat['id']}/open-ready-check")
+    response = await client.patch(
+        f"/api/heats/{heat['id']}", json={"name": "Nova"}
+    )
+    assert response.status_code == 200, response.text
+
+    heat = (await client.get(f"/api/events/{event['id']}/heats")).json()[0]
+    await client.post(f"/api/lanes/{heat['heat_lanes'][0]['id']}/ready")
+    await client.post(f"/api/heats/{heat['id']}/start")
+    response = await client.patch(
+        f"/api/heats/{heat['id']}", json={"name": "Depois"}
+    )
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"] == "bateria_ja_iniciada"
+
+
+@pytest.mark.asyncio
+async def test_lane_ready_before_ready_check_uses_bateria_code(client):
+    event = await create_event(client)
+    heat = await create_heat(client, event["id"])
+    heat = await configure_lanes(client, heat["id"], [(1, "Ana")])
+    response = await client.post(
+        f"/api/lanes/{heat['heat_lanes'][0]['id']}/ready"
+    )
+    assert response.status_code == 400, response.text
+    assert response.json()["detail"] == "bateria_nao_esta_em_ready_check"
+
+
+@pytest.mark.asyncio
+async def test_lane_dq_before_start_uses_bateria_code(client):
+    event = await create_event(client)
+    heat = await create_heat(client, event["id"])
+    heat = await configure_lanes(client, heat["id"], [(1, "Ana")])
+    response = await client.post(
+        f"/api/lanes/{heat['heat_lanes'][0]['id']}/dq"
+    )
+    assert response.status_code == 400, response.text
+    assert response.json()["detail"] == "bateria_nao_ativa"
+
+
+@pytest.mark.asyncio
+async def test_started_prova_keeps_prova_code(client):
+    event = await create_event(client)
+    prova = await create_prova(client, event["id"])
+    heat = await create_heat_in_prova(client, prova["id"])
+    await configure_lanes(client, heat["id"], [(1, "Ana")])
+    await client.post(f"/api/heats/{heat['id']}/open-ready-check")
+    heat = (await client.get(f"/api/provas/{prova['id']}/heats")).json()[0]
+    await client.post(f"/api/lanes/{heat['heat_lanes'][0]['id']}/ready")
+    await client.post(f"/api/heats/{heat['id']}/start")
+
+    response = await client.patch(
+        f"/api/provas/{prova['id']}", json={"distance_m": 50}
+    )
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"] == "prova_ja_iniciada"
