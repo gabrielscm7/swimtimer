@@ -32,6 +32,7 @@ const els = {
   right: document.getElementById("sup-right"),
   heats: document.getElementById("sup-heats"),
   rightToggle: document.getElementById("sup-right-toggle"),
+  backupWarn: document.getElementById("sup-backup-warn"),
 };
 
 let eventData = null;
@@ -89,6 +90,32 @@ function formatMMSS(seconds) {
 function heatDistance(heat) {
   if (heat.heat_type === "bateria") return `${heat.distance_m}m`;
   return formatDuration(heat.duration_s || 0);
+}
+
+const BACKUP_STALE_S = 15 * 60;
+
+function renderBackupStatus(status) {
+  if (!els.backupWarn) return;
+  const now = Date.now() / 1000;
+  const stale =
+    status.last_backup_at != null &&
+    now - status.last_backup_at > BACKUP_STALE_S;
+  const mirrorBad = Boolean(status.mirror_enabled) && status.mirror_ok === false;
+  const problem = stale || mirrorBad;
+  els.backupWarn.hidden = !problem;
+  if (!problem) return;
+  els.backupWarn.textContent = stale
+    ? "⚠ Backup > 15 min"
+    : "⚠ Espelho do backup indisponível";
+  els.backupWarn.title = status.last_error || "";
+}
+
+async function refreshBackupStatus() {
+  try {
+    renderBackupStatus(await api("GET", "/api/status"));
+  } catch (error) {
+    /* status indisponível */
+  }
 }
 
 function ensureAudio() {
@@ -328,6 +355,17 @@ function modeFinished(heat) {
       ? formatMMSS(heat.finished_at - heat.started_at)
       : "—";
   const next = nextHeat();
+  const snapshot = heat.result_snapshot;
+  const revisionLabel = snapshot
+    ? `Revisão ${snapshot.revision} · ${
+        snapshot.status === "official"
+          ? "Oficial"
+          : snapshot.status === "corrected"
+            ? "Retificado"
+            : "Provisório"
+      }`
+    : "Sem revisão";
+  const homologated = snapshot && snapshot.status === "official";
   return `
     <div class="sup-card">
       <h2>🏁 Bateria encerrada</h2>
@@ -335,8 +373,11 @@ function modeFinished(heat) {
         <thead><tr><th>Pos</th><th>Nome</th><th>Equipe</th><th>Tempo</th><th>Velocidade</th></tr></thead>
         <tbody>${rows || '<tr><td colspan="5" class="muted">Sem participantes.</td></tr>'}</tbody>
       </table>
-      <div class="muted" style="margin-top:10px">Bateria concluída em ${duration}</div>
+      <div class="muted" style="margin-top:10px">Bateria concluída em ${duration} · ${revisionLabel}</div>
     </div>
+    <button class="sup-btn sup-btn-blue" data-act="homologate" ${homologated ? "disabled" : ""}>
+      ✓ Homologar resultado
+    </button>
     <button class="sup-btn sup-btn-green" data-act="next-heat">
       ${next ? "▶ Próxima bateria" : "🏆 Ver evento encerrado"}
     </button>
@@ -563,6 +604,17 @@ async function finishHeat(heatId) {
   }
 }
 
+async function homologateHeat() {
+  const heat = currentHeat();
+  if (!heat) return;
+  if (!window.confirm(`Homologar o resultado de ${heat.name}?`)) return;
+  const result = await api("POST", `/api/heats/${heat.id}/homologate`);
+  applyHeatPayload(result);
+  renderAll();
+  showToast("Resultado homologado");
+  refreshBackupStatus();
+}
+
 async function dqLane(laneId, laneNumber) {
   if (!window.confirm(`Confirmar desclassificação da Raia ${laneNumber}?`)) return;
   try {
@@ -604,6 +656,8 @@ els.left.addEventListener("click", (event) => {
     }
   } else if (action === "dq") {
     dqLane(target.dataset.lane, target.dataset.number);
+  } else if (action === "homologate") {
+    withButton(target, homologateHeat);
   } else if (action === "emergency-toggle") {
     emergencyOpen = !emergencyOpen;
     renderLeft();
@@ -687,6 +741,7 @@ async function init() {
     const status = await api("GET", "/api/status");
     connected = status.connected_clients;
     renderHeader();
+    renderBackupStatus(status);
   } catch (error) {
     /* ignora */
   }
@@ -697,6 +752,7 @@ async function init() {
     return;
   }
   ws.connect();
+  setInterval(refreshBackupStatus, 30000);
 }
 
 init();

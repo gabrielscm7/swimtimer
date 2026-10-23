@@ -41,6 +41,27 @@ def _prova_state_message(prova_payload: dict) -> dict:
     }
 
 
+def _settings_updated_message(event_id: str, payload: dict) -> dict:
+    return {
+        "type": "settings_updated",
+        "scope": "event",
+        "event_id": event_id,
+        "payload": payload,
+    }
+
+
+async def _broadcast_settings(event) -> None:
+    await manager.broadcast(
+        _settings_updated_message(
+            event.id,
+            {
+                "public_results_enabled": bool(event.public_results_enabled),
+                "public_name_mode": event.public_name_mode,
+            },
+        )
+    )
+
+
 async def _active_heat_count(session: AsyncSession) -> int:
     result = await session.execute(
         select(func.count())

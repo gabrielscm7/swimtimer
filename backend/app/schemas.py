@@ -8,6 +8,8 @@ HeatStatus = Literal["scheduled", "ready_check", "active", "finished"]
 LaneStatus = Literal["assigned", "ready", "active", "finished", "dq"]
 ClassificationCriterion = Literal["lowest_time"]
 MixedRanking = Literal["overall", "by_naipe", "both"]
+# Exibicao publica dos nomes: completo ou "Maria S.".
+PublicNameMode = Literal["full", "initials"]
 # Atletas continuam apenas M/F; provas aceitam MISTO.
 AthleteNaipe = Literal["M", "F"]
 Naipe = Literal["M", "F", "MISTO"]
@@ -81,6 +83,8 @@ class EventUpdate(BaseModel):
     date: Optional[str] = Field(default=None, max_length=40)
     pool_length_m: Optional[int] = None
     status: Optional[EventStatus] = None
+    public_results_enabled: Optional[bool] = None
+    public_name_mode: Optional[PublicNameMode] = None
 
     @field_validator("pool_length_m")
     @classmethod
@@ -99,6 +103,8 @@ class EventResponse(BaseModel):
     date: str | None = None
     pool_length_m: int
     status: str
+    public_results_enabled: bool = True
+    public_name_mode: str = "full"
     created_at: float
     heats: list["HeatResponse"] = Field(default_factory=list)
 

@@ -386,6 +386,31 @@
         width: 12px;
         height: 12px;
       }
+      .pub-qr {
+        position: fixed;
+        left: 18px;
+        bottom: 18px;
+        z-index: 50;
+        background: #fff;
+        border-radius: 12px;
+        padding: 8px;
+        line-height: 0;
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+      }
+      .pub-qr svg {
+        display: block;
+        width: clamp(88px, 9vw, 140px);
+        height: auto;
+      }
+      .pub-qr-label {
+        color: #111;
+        font-size: 11px;
+        font-weight: 700;
+        text-align: center;
+        line-height: 1.2;
+        margin-top: 4px;
+        max-width: 140px;
+      }
       @media (max-width: 900px) {
         .pub-interval {
           grid-template-columns: 1fr;
@@ -403,13 +428,16 @@
   </head>
   <body>
     <main id="pub-stage"></main>
+    <div class="pub-qr" id="pub-qr" hidden></div>
     <div class="pub-overlay" id="pub-overlay" hidden>
       <span class="dot offline" id="pub-dot"></span>
       <button class="pub-fs" id="pub-fullscreen" title="Tela cheia">⛶</button>
     </div>
 
+    <script src="/static/vendor/qrcode/qrcode.js"></script>
     <script src="/static/clock_logic.js"></script>
     <script src="/static/sequence_logic.js"></script>
+    <script src="/static/results_logic.js"></script>
     <script type="module" src="/static/publico.js"></script>
   </body>
 </html>

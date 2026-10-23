@@ -15,6 +15,7 @@ from ..services.broadcast import (
     _broadcast_server_status,
 )
 from ..services.inscricao import enforce_heat_inscricao
+from ..services.backup import backup_service
 from ..services.lane_actions import (
     _client_ip,
     _do_finish,
@@ -166,7 +167,12 @@ async def lane_dq(
             raise HTTPException(status_code=400, detail="bateria_nao_ativa")
         now = time.time()
         lane.status = "dq"
-        all_finished = await _maybe_finish_heat(session, heat)
+        all_finished = await _maybe_finish_heat(
+            session,
+            heat,
+            role="supervisor",
+            source_ip=_client_ip(request),
+        )
         _log_action(
             session,
             action="dq",
@@ -182,6 +188,7 @@ async def lane_dq(
         await _broadcast_heat(session, heat)
         if all_finished:
             await _broadcast_server_status()
+            backup_service.schedule_after_finish(heat.event_id)
         return await _lane_payload(session, lane, heat)
 
 

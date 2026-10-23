@@ -4,6 +4,40 @@ Formato: [Semantic Versioning](https://semver.org/lang/pt-BR/)
 
 ---
 
+## [2.5.0] — 2026-10-23
+
+### Added
+- `result_snapshot` append-only: revisão imutável do resultado de cada bateria
+  com payload canônico (atleta/equipe/naipe/categoria no momento), hash
+  encadeado por evento e triggers SQLite que abortam UPDATE/DELETE
+- Revisão 1 (provisória) ao finalizar a bateria, nova revisão a cada correção
+  (DQ, reversão de DQ, reset/undo-finish — integração pelo contrato
+  `record_revision`) e na homologação
+- `POST /api/heats/{id}/homologate` (supervisor) e
+  `GET /api/events/{id}/audit/verify` (recalcula a cadeia de hashes)
+- Diário NDJSON por evento em `data/journal/<event_id>.ndjson` (append com
+  flush + fsync), espelhando `action_log` e `result_snapshot`
+- `BackupService` no lifespan: intervalo `BACKUP_INTERVAL_MIN` (padrão 5),
+  backup 10 s após finalizar bateria, sidecar `.sha256`, retenção de 12
+  recentes + 1 por hora + final, espelho opcional `BACKUP_MIRROR_DIR` com
+  verificação; `/api/status` expõe `last_backup_at`, `last_error` e
+  `mirror_ok`
+- `scripts/restore.sh` com validação de checksum e `tests/ops/test_restore.sh`
+- Exportações: `results.csv` (`;` + BOM), `sumula.html?heat=` imprimível e
+  `POST /api/events/{id}/export/bundle` (banco + CSV + súmulas + diário +
+  `manifest.sha256`)
+- Endpoints públicos somente leitura `/api/public/events/{id}/results` e
+  `/api/public/provas/{id}` com `Cache-Control: max-age=2` e ETag/304
+- Página mobile-first `resultados.html` (provas, classificação, baterias,
+  selos Oficial/Provisório/Retificado, busca) e QR code vendorizado na TV
+- Privacidade por evento: `public_results_enabled` e `public_name_mode`
+  (`full`/`initials`), editáveis na gestão e aplicados ao vivo via WS
+  `settings_updated`; mascaramento nunca afeta súmulas, exportações, diário,
+  snapshots ou gestão
+- Migrações `0010_result_snapshot` e `0011_event_public_settings`
+
+---
+
 ## [2.4.0] — 2026-10-22
 
 ### Added

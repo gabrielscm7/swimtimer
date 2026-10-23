@@ -671,6 +671,12 @@ button.error {
   background: rgba(245, 158, 11, 0.12);
 }
 
+.status-pill.warning {
+  color: var(--red);
+  border-color: rgba(239, 68, 68, 0.55);
+  background: rgba(239, 68, 68, 0.12);
+}
+
 .empty-state {
   text-align: center;
   padding: 28px 20px;

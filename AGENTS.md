@@ -15,6 +15,13 @@ Frontend (sem build step):
 node --test frontend/tests/*.test.js
 ```
 
+Ops (scripts shell, sem framework):
+
+```bash
+bash tests/ops/test_ensure_env.sh
+bash tests/ops/test_restore.sh
+```
+
 ## Snapshot da API
 
 ```bash

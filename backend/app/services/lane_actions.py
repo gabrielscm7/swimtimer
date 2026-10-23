@@ -1,6 +1,7 @@
 import json
 import math
 import time
+import uuid
 
 from fastapi import Request
 from sqlalchemy import func, select
@@ -11,7 +12,10 @@ from ..core.errors import LaneActionError
 from ..core.locks import _heat_guard
 from ..models import ActionLog, Heat, HeatLane, LapEvent, ProcessedOp, Team
 from ..schemas import compute_speed, format_race_time
+from . import snapshots
+from .backup import backup_service
 from .broadcast import _broadcast_heat, _broadcast_server_status
+from .journal import append as journal_append
 from .payloads import _heat_lanes, _participant_lanes, _sync_prova_status
 
 # Âncora monotônica por bateria: (monotonic_no_início, wall_no_início).
@@ -126,24 +130,47 @@ def _log_action(
     source_ip: str | None = None,
     payload: dict | None = None,
 ) -> None:
-    session.add(
-        ActionLog(
-            received_at=received_at,
-            effective_ts=effective_ts,
-            event_id=event_id,
-            heat_id=heat_id,
-            lane_id=lane_id,
-            action=action,
-            op_id=op_id,
-            source_ip=source_ip,
-            payload_json=(
-                json.dumps(payload, default=str) if payload is not None else None
-            ),
-        )
+    entry = ActionLog(
+        id=str(uuid.uuid4()),
+        received_at=received_at,
+        effective_ts=effective_ts,
+        event_id=event_id,
+        heat_id=heat_id,
+        lane_id=lane_id,
+        action=action,
+        op_id=op_id,
+        source_ip=source_ip,
+        payload_json=(
+            json.dumps(payload, default=str) if payload is not None else None
+        ),
     )
+    session.add(entry)
+    journal_append(
+        event_id,
+        {
+            "kind": "action_log",
+            "id": entry.id,
+            "received_at": entry.received_at,
+            "effective_ts": entry.effective_ts,
+            "event_id": entry.event_id,
+            "heat_id": entry.heat_id,
+            "lane_id": entry.lane_id,
+            "action": entry.action,
+            "op_id": entry.op_id,
+            "source_ip": entry.source_ip,
+            "payload_json": entry.payload_json,
+        },
+    )
+    backup_service.notify_activity(event_id)
 
 
-async def _maybe_finish_heat(session: AsyncSession, heat: Heat) -> bool:
+async def _maybe_finish_heat(
+    session: AsyncSession,
+    heat: Heat,
+    *,
+    role: str = "system",
+    source_ip: str | None = None,
+) -> bool:
     await session.flush()
     lanes = await _heat_lanes(session, heat.id)
     participants = _participant_lanes(lanes)
@@ -153,6 +180,14 @@ async def _maybe_finish_heat(session: AsyncSession, heat: Heat) -> bool:
     ):
         heat.status = "finished"
         heat.finished_at = time.time()
+        await snapshots.record_revision(
+            session,
+            heat,
+            reason=snapshots.REASON_FINISH,
+            status=snapshots.SNAPSHOT_PROVISIONAL,
+            role=role,
+            ip=source_ip,
+        )
         finished = True
     await _sync_prova_status(session, heat.prova_id)
     return finished
@@ -199,7 +234,9 @@ async def _do_finish(
         lane.received_at = received_at
         lane.late = late
         lane.status = "finished"
-        all_finished = await _maybe_finish_heat(session, heat)
+        all_finished = await _maybe_finish_heat(
+            session, heat, role="fiscal", source_ip=source_ip
+        )
 
         team_name = None
         if lane.team_id:
@@ -245,6 +282,7 @@ async def _do_finish(
         await _broadcast_heat(session, heat)
         if all_finished:
             await _broadcast_server_status()
+            backup_service.schedule_after_finish(heat.event_id)
 
         return result
 

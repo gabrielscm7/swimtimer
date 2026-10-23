@@ -127,6 +127,7 @@ function renderEvents() {
         <a href="gestao.html?event=${event.id}">⚙️ Gestão</a>
         <a href="supervisor.html?event=${event.id}">👁 Supervisor</a>
         <a href="publico.html?event=${event.id}">📺 Público</a>
+        <a href="resultados.html?event=${event.id}">📊 Resultados</a>
         ${deleteButton}
       </div>
     `;

@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#0f1117" />
+    <title>SwimTimer — Resultados</title>
+    <link rel="stylesheet" href="/static/style.css" />
+    <style>
+      .res-app {
+        max-width: 920px;
+        margin: 0 auto;
+        padding: 16px 14px 48px;
+      }
+      .res-header {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        margin-bottom: 18px;
+      }
+      .res-header h1 {
+        font-size: 1.5rem;
+        margin: 0;
+        line-height: 1.2;
+      }
+      .res-meta {
+        color: var(--muted);
+        font-size: 0.9rem;
+      }
+      .res-search {
+        margin-top: 10px;
+        width: 100%;
+        padding: 12px 14px;
+        border-radius: 12px;
+        border: 1px solid var(--border);
+        background: var(--input-bg);
+        color: var(--text);
+        font-size: 1rem;
+      }
+      .res-prova {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        padding: 14px;
+        margin-bottom: 16px;
+      }
+      .res-prova-head {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+        margin-bottom: 4px;
+      }
+      .res-prova-head h2 {
+        font-size: 1.1rem;
+        margin: 0;
+        flex: 1;
+        min-width: 160px;
+      }
+      .res-badge {
+        display: inline-flex;
+        align-items: center;
+        padding: 3px 9px;
+        border-radius: 999px;
+        font-size: 0.7rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.4px;
+        border: 1px solid var(--border);
+        color: var(--muted);
+        white-space: nowrap;
+      }
+      .res-badge.official {
+        color: var(--green);
+        border-color: rgba(16, 185, 129, 0.45);
+        background: rgba(16, 185, 129, 0.12);
+      }
+      .res-badge.provisional {
+        color: var(--amber);
+        border-color: rgba(245, 158, 11, 0.45);
+        background: rgba(245, 158, 11, 0.12);
+      }
+      .res-badge.corrected {
+        color: var(--cyan);
+        border-color: rgba(0, 212, 255, 0.45);
+        background: rgba(0, 212, 255, 0.1);
+      }
+      .res-section-title {
+        text-transform: uppercase;
+        font-size: 0.75rem;
+        letter-spacing: 0.6px;
+        color: var(--muted);
+        margin: 14px 0 6px;
+      }
+      .res-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.92rem;
+      }
+      .res-table th,
+      .res-table td {
+        text-align: left;
+        padding: 8px 6px;
+        border-bottom: 1px solid var(--border);
+        vertical-align: top;
+      }
+      .res-table th {
+        color: var(--muted);
+        font-size: 0.72rem;
+        text-transform: uppercase;
+        letter-spacing: 0.4px;
+      }
+      .res-table td.pos {
+        width: 42px;
+        font-weight: 700;
+        color: var(--cyan);
+      }
+      .res-table td.time {
+        white-space: nowrap;
+        font-variant-numeric: tabular-nums;
+      }
+      .res-heats {
+        margin-top: 12px;
+      }
+      .res-heat {
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 10px 12px;
+        margin-bottom: 8px;
+        background: var(--bg-2);
+      }
+      .res-heat > summary {
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+        font-weight: 600;
+        list-style: none;
+      }
+      .res-heat > summary::-webkit-details-marker {
+        display: none;
+      }
+      .res-heat > summary .res-badge {
+        margin-left: auto;
+      }
+      .res-legend {
+        color: var(--muted);
+        font-size: 0.82rem;
+        margin-top: 14px;
+      }
+      .res-message {
+        background: var(--panel);
+        border: 1px dashed var(--border);
+        border-radius: var(--radius);
+        padding: 28px 18px;
+        text-align: center;
+        color: var(--muted);
+      }
+      @media (min-width: 700px) {
+        .res-header h1 {
+          font-size: 1.9rem;
+        }
+        .res-app {
+          padding-top: 28px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="res-app">
+      <header class="res-header">
+        <div class="brand">Swim<span>Timer</span></div>
+        <h1 id="res-event-name">Resultados</h1>
+        <div class="res-meta" id="res-event-meta"></div>
+        <div class="res-meta" id="res-settings-note"></div>
+        <input
+          class="res-search"
+          id="res-search"
+          type="search"
+          placeholder="Buscar atleta ou equipe"
+          autocomplete="off"
+        />
+      </header>
+      <div id="res-status" class="res-message" hidden></div>
+      <section id="res-provas"></section>
+      <p class="res-legend" id="res-footer">
+        Resultados atualizados automaticamente. Selos: Oficial, Provisório e
+        Retificado.
+      </p>
+    </main>
+    <script src="/static/results_logic.js"></script>
+    <script type="module" src="/static/results.js"></script>
+  </body>
+</html>

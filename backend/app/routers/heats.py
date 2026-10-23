@@ -21,6 +21,7 @@ from ..services.broadcast import (
     _prova_state_message,
     manager,
 )
+from ..services.backup import backup_service
 from ..services.inscricao import enforce_heat_inscricao
 from ..services.lane_actions import (
     _anchor_heat,
@@ -28,6 +29,7 @@ from ..services.lane_actions import (
     _drop_anchor,
     _log_action,
 )
+from ..services import snapshots
 from ..services.lookups import (
     _get_event,
     _get_heat,
@@ -115,6 +117,19 @@ async def list_heats_in_prova(
     await _get_prova(session, prova_id)
     heats = await _prova_heats(session, prova_id)
     return [await _heat_payload(session, heat) for heat in heats]
+
+
+@router.get("/api/heats/{heat_id}")
+async def get_heat(
+    heat_id: str,
+    session: AsyncSession = Depends(get_db),
+) -> dict:
+    heat = await _get_heat(session, heat_id)
+    payload = await _heat_payload(session, heat)
+    payload["result_snapshot"] = snapshots.snapshot_summary(
+        await snapshots.latest_for_heat(session, heat.id)
+    )
+    return payload
 
 
 @router.get("/api/events/{event_id}/heats")
@@ -380,6 +395,14 @@ async def finish_heat(
         heat.status = "finished"
         heat.finished_at = now
         _drop_anchor(heat.id)
+        await snapshots.record_revision(
+            session,
+            heat,
+            reason=snapshots.REASON_FINISH,
+            status=snapshots.SNAPSHOT_PROVISIONAL,
+            role="supervisor",
+            ip=_client_ip(request),
+        )
         _log_action(
             session,
             action="finish_heat",
@@ -394,7 +417,44 @@ async def finish_heat(
         await session.refresh(heat)
         await _broadcast_heat(session, heat)
         await _broadcast_server_status()
+        backup_service.schedule_after_finish(heat.event_id)
         return await _heat_payload(session, heat)
+
+
+@router.post("/api/heats/{heat_id}/homologate")
+async def homologate_heat(
+    heat_id: str,
+    request: Request,
+    session: AsyncSession = Depends(get_db),
+) -> dict:
+    """Supervisor homologa o resultado de uma bateria finalizada."""
+    async with _heat_guard(heat_id):
+        session.expire_all()
+        heat = await _get_heat(session, heat_id)
+        if heat.status != "finished":
+            raise HTTPException(
+                status_code=409, detail="bateria_nao_finalizada"
+            )
+        latest = await snapshots.latest_for_heat(session, heat.id)
+        if latest is not None and latest.status == snapshots.SNAPSHOT_OFFICIAL:
+            raise HTTPException(
+                status_code=409, detail="bateria_ja_homologada"
+            )
+        snapshot = await snapshots.record_revision(
+            session,
+            heat,
+            reason=snapshots.REASON_HOMOLOGATION,
+            status=snapshots.SNAPSHOT_OFFICIAL,
+            role="supervisor",
+            ip=_client_ip(request),
+        )
+        await session.commit()
+        await session.refresh(heat)
+        backup_service.notify_activity(heat.event_id)
+        await _broadcast_heat(session, heat)
+        payload = await _heat_payload(session, heat)
+        payload["result_snapshot"] = snapshots.snapshot_summary(snapshot)
+        return payload
 
 
 @router.post("/api/heats/{heat_id}/lanes")

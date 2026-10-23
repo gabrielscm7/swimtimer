@@ -1,9 +1,19 @@
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..classification import build_classification, prova_status
-from ..models import Athlete, Event, Heat, HeatLane, LapEvent, Prova, Team
+from ..models import (
+    Athlete,
+    Event,
+    Heat,
+    HeatLane,
+    LapEvent,
+    Prova,
+    ResultSnapshot,
+    Team,
+)
 from ..schemas import compute_speed, format_race_time
+from .snapshots import snapshot_summary
 
 
 async def _team_map(session: AsyncSession, event_id: str) -> dict[str, dict]:
@@ -192,6 +202,16 @@ async def _heats_payload(
             if last is not None:
                 last_laps[lane_id] = last
 
+    latest_snapshots: dict[str, ResultSnapshot] = {}
+    if heat_ids:
+        rows = await session.execute(
+            select(ResultSnapshot)
+            .where(ResultSnapshot.heat_id.in_(heat_ids))
+            .order_by(text("rowid ASC"))
+        )
+        for snapshot in rows.scalars().all():
+            latest_snapshots[snapshot.heat_id] = snapshot
+
     payloads: list[dict] = []
     for heat in heats:
         event = events.get(heat.event_id)
@@ -217,6 +237,9 @@ async def _heats_payload(
                 "status": heat.status,
                 "started_at": heat.started_at,
                 "finished_at": heat.finished_at,
+                "result_snapshot": snapshot_summary(
+                    latest_snapshots.get(heat.id)
+                ),
                 "heat_lanes": [
                     _lane_dict(
                         lane,
@@ -488,6 +511,8 @@ async def _event_payload(
         "date": event.date,
         "pool_length_m": event.pool_length_m,
         "status": event.status,
+        "public_results_enabled": bool(event.public_results_enabled),
+        "public_name_mode": event.public_name_mode,
         "created_at": event.created_at,
         "provas": [
             {

@@ -29,6 +29,12 @@ class Event(Base):
     date: Mapped[str | None] = mapped_column(String, nullable=True)
     pool_length_m: Mapped[int] = mapped_column(Integer, nullable=False, default=25)
     status: Mapped[str] = mapped_column(String, default="draft", nullable=False)
+    public_results_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=True, nullable=False, server_default=text("1")
+    )
+    public_name_mode: Mapped[str] = mapped_column(
+        String, default="full", nullable=False, server_default=text("'full'")
+    )
     created_at: Mapped[float] = mapped_column(Float, nullable=False)
 
     teams: Mapped[list["Team"]] = relationship(
@@ -272,6 +278,41 @@ class ActionLog(Base):
 
     __table_args__ = (
         Index("ix_action_log_heat_received", "heat_id", "received_at"),
+    )
+
+
+class ResultSnapshot(Base):
+    """Revisao imutavel e encadeada do resultado de uma bateria.
+
+    Append-only: os triggers da migracao 0010 abortam UPDATE/DELETE. O
+    `payload_json` e canonico (sort_keys, separadores compactos) e o `hash` e
+    sha256 de `prev_hash + payload_json`, formando uma cadeia por evento.
+    """
+
+    __tablename__ = "result_snapshot"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    event_id: Mapped[str] = mapped_column(String, nullable=False)
+    prova_id: Mapped[str] = mapped_column(String, nullable=False)
+    heat_id: Mapped[str] = mapped_column(String, nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String, nullable=False)
+    reason: Mapped[str] = mapped_column(String, nullable=False)
+    created_at: Mapped[float] = mapped_column(Float, nullable=False)
+    created_by: Mapped[str] = mapped_column(String, nullable=False)
+    created_by_ip: Mapped[str | None] = mapped_column(String, nullable=True)
+    payload_json: Mapped[str] = mapped_column(Text, nullable=False)
+    prev_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    hash: Mapped[str] = mapped_column(String(64), nullable=False)
+
+    __table_args__ = (
+        Index("ix_result_snapshot_event", "event_id"),
+        Index(
+            "uq_result_snapshot_heat_revision",
+            "heat_id",
+            "revision",
+            unique=True,
+        ),
     )
 
 

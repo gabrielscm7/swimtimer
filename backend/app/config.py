@@ -38,6 +38,25 @@ class Settings(BaseSettings):
     # PIN do supervisor para autorizar excecoes de inscricao (force).
     # Se nao configurado, nenhum override e aceito.
     OPERATOR_PIN: str | None = None
+    # Diario NDJSON por evento (auditoria externa, append-only).
+    JOURNAL_DIR: str = ""
+    # Backup continuo: intervalo entre backups e destino espelho opcional
+    # (pendrive). O espelho precisa estar visivel dentro do container.
+    BACKUP_INTERVAL_MIN: float = 5.0
+    BACKUP_MIRROR_DIR: str = ""
+    BACKUP_DIR: str = ""
+
+    @property
+    def journal_dir(self) -> Path:
+        if self.JOURNAL_DIR:
+            return Path(self.JOURNAL_DIR)
+        return BACKEND_DIR / "data" / "journal"
+
+    @property
+    def backup_dir(self) -> Path:
+        if self.BACKUP_DIR:
+            return Path(self.BACKUP_DIR)
+        return BACKEND_DIR / "data" / "backups"
 
     @property
     def frontend_dir(self) -> Path:

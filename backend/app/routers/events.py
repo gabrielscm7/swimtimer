@@ -1,13 +1,27 @@
 import time
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db
-from ..models import Athlete, Event, Heat, HeatLane, LapEvent, Prova, Team
+from ..models import (
+    Athlete,
+    Event,
+    Heat,
+    HeatLane,
+    LapEvent,
+    Prova,
+    ResultSnapshot,
+    Team,
+)
 from ..schemas import EventCreate, EventUpdate
-from ..services.broadcast import _broadcast_server_status
+from ..services import snapshots
+from ..services.backup import backup_service
+from ..services.broadcast import (
+    _broadcast_server_status,
+    _broadcast_settings,
+)
 from ..services.lookups import _get_event
 from ..services.payloads import _event_payload
 
@@ -66,11 +80,32 @@ async def update_event(
     session: AsyncSession = Depends(get_db),
 ) -> dict:
     event = await _get_event(session, event_id)
+    previous_status = event.status
+    previous_public = (
+        bool(event.public_results_enabled),
+        event.public_name_mode,
+    )
     for field, value in payload.model_dump(exclude_unset=True).items():
         setattr(event, field, value)
     await session.commit()
     await session.refresh(event)
+    if previous_public != (
+        bool(event.public_results_enabled),
+        event.public_name_mode,
+    ):
+        await _broadcast_settings(event)
+    if previous_status != "finished" and event.status == "finished":
+        await backup_service.backup_now(event.id, kind="final")
     return await _event_payload(session, event, include_teams=True)
+
+
+@router.get("/api/events/{event_id}/audit/verify")
+async def audit_verify(
+    event_id: str,
+    session: AsyncSession = Depends(get_db),
+) -> dict:
+    await _get_event(session, event_id)
+    return await snapshots.verify_event(session, event_id)
 
 
 @router.delete("/api/events/{event_id}", status_code=204)
@@ -81,6 +116,13 @@ async def delete_event(
     event = await _get_event(session, event_id)
     if event.status != "draft":
         raise HTTPException(status_code=409, detail="evento_nao_esta_draft")
+    result = await session.execute(
+        select(func.count())
+        .select_from(ResultSnapshot)
+        .where(ResultSnapshot.event_id == event_id)
+    )
+    if int(result.scalar_one()):
+        raise HTTPException(status_code=409, detail="evento_possui_resultados")
     heat_ids = select(Heat.id).where(Heat.event_id == event_id)
     lane_ids = select(HeatLane.id).where(HeatLane.heat_id.in_(heat_ids))
     await session.execute(delete(LapEvent).where(LapEvent.lane_id.in_(lane_ids)))

@@ -17,6 +17,7 @@ const {
   nextProvaAfter,
   provaHeaderLabel,
 } = window.SequenceLogic;
+const { displayName } = window.ResultsLogic;
 
 const RESULT_MS = 20000;
 const PROVA_RESULT_MS = 30000;
@@ -29,6 +30,7 @@ const els = {
   overlay: document.getElementById("pub-overlay"),
   dot: document.getElementById("pub-dot"),
   fullscreen: document.getElementById("pub-fullscreen"),
+  qr: document.getElementById("pub-qr"),
 };
 
 let eventData = null;
@@ -58,6 +60,29 @@ function participantLanes(heat) {
   return heat.heat_lanes
     .filter((lane) => lane.participant_name || lane.team_id)
     .sort((a, b) => a.lane_number - b.lane_number);
+}
+
+function pubName(name) {
+  return displayName(name, eventData ? eventData.public_name_mode : "full");
+}
+
+function updateQr() {
+  if (!els.qr) return;
+  if (!eventData || eventData.public_results_enabled === false) {
+    els.qr.hidden = true;
+    return;
+  }
+  const url = new URL("resultados.html", window.location.href);
+  url.search = `?event=${encodeURIComponent(eventData.id)}`;
+  try {
+    const qr = qrcode(0, "M");
+    qr.addData(url.toString());
+    qr.make();
+    els.qr.innerHTML = `${qr.createSvgTag({ cellSize: 4, margin: 1 })}<div class="pub-qr-label">Resultados no celular</div>`;
+    els.qr.hidden = false;
+  } catch (error) {
+    els.qr.hidden = true;
+  }
 }
 
 function nextScheduledAfter(eventSeq) {
@@ -91,7 +116,7 @@ function classificationRows(standings, excluded) {
     rows.push(`
       <div class="pub-trow finished">
         <div class="pub-pos ${posClass((entry.position || 1) - 1)}">${entry.position ?? "—"}º${entry.tied ? "=" : ""}</div>
-        <div class="pub-name">${escapeHtml(entry.participant_name || "—")}</div>
+        <div class="pub-name">${escapeHtml(pubName(entry.participant_name) || "—")}</div>
         <div class="pub-team">${logoImg(entry.team_logo_url, entry.team_name)} ${escapeHtml(entry.team_name || "—")}</div>
         <div class="pub-time">${entry.race_time_display || "—"}</div>
       </div>`);
@@ -106,7 +131,7 @@ function classificationRows(standings, excluded) {
     rows.push(`
       <div class="pub-trow dq">
         <div class="pub-pos">—</div>
-        <div class="pub-name">${escapeHtml(entry.participant_name || "—")}</div>
+        <div class="pub-name">${escapeHtml(pubName(entry.participant_name) || "—")}</div>
         <div class="pub-team">${logoImg(entry.team_logo_url, entry.team_name)} ${escapeHtml(entry.team_name || "—")}</div>
         <div class="pub-time">${label}</div>
       </div>`);
@@ -328,7 +353,7 @@ function viewReady() {
       (lane) => `
       <div class="pub-lane-card">
         <div class="pub-lane-num">RAIA ${lane.lane_number}</div>
-        <div class="pub-lane-name">${escapeHtml(lane.participant_name || "—")}</div>
+        <div class="pub-lane-name">${escapeHtml(pubName(lane.participant_name) || "—")}</div>
         <div class="pub-lane-team">${logoImg(lane.team_logo_url, lane.team)} ${escapeHtml(lane.team || "sem equipe")}</div>
       </div>`
     )
@@ -378,7 +403,7 @@ function batteryTable(heat, live) {
     rows.push(`
       <div class="pub-trow finished">
         <div class="pub-pos ${posClass(index)}">${index + 1}º</div>
-        <div class="pub-name">${escapeHtml(lane.participant_name || "—")}</div>
+        <div class="pub-name">${escapeHtml(pubName(lane.participant_name) || "—")}</div>
         <div class="pub-team">${logoImg(lane.team_logo_url, lane.team)} ${escapeHtml(lane.team || "—")}</div>
         <div class="pub-time">${lane.race_time_display || formatTime(lane.race_time_ms)}</div>
         <div class="pub-speed">${lane.speed_ms != null ? lane.speed_ms + " m/s" : "—"}</div>
@@ -388,7 +413,7 @@ function batteryTable(heat, live) {
     rows.push(`
       <div class="pub-trow running">
         <div class="pub-pos">—</div>
-        <div class="pub-name">${escapeHtml(lane.participant_name || "—")}</div>
+        <div class="pub-name">${escapeHtml(pubName(lane.participant_name) || "—")}</div>
         <div class="pub-team">${logoImg(lane.team_logo_url, lane.team)} ${escapeHtml(lane.team || "—")}</div>
         <div class="pub-time">${live ? '<span data-lane-time>00:00.00</span>' : "—"}</div>
         <div class="pub-speed">—</div>
@@ -398,7 +423,7 @@ function batteryTable(heat, live) {
     rows.push(`
       <div class="pub-trow dq">
         <div class="pub-pos">—</div>
-        <div class="pub-name">${escapeHtml(lane.participant_name || "—")}</div>
+        <div class="pub-name">${escapeHtml(pubName(lane.participant_name) || "—")}</div>
         <div class="pub-team">${logoImg(lane.team_logo_url, lane.team)} ${escapeHtml(lane.team || "—")}</div>
         <div class="pub-time"><span class="pub-dq-badge">DQ</span></div>
         <div class="pub-speed">—</div>
@@ -420,7 +445,7 @@ function marathonTable(heat, live) {
       (lane, index) => `
       <div class="pub-trow ${lane.status === "dq" ? "dq" : ""}">
         <div class="pub-pos ${posClass(index)}">${lane.status === "dq" ? "—" : index + 1}º</div>
-        <div class="pub-name">${escapeHtml(lane.team || lane.participant_name || "—")}</div>
+        <div class="pub-name">${escapeHtml(lane.team || pubName(lane.participant_name) || "—")}</div>
         <div class="pub-team">Raia ${lane.lane_number}</div>
         <div class="pub-time">${lane.laps}</div>
         <div class="pub-speed">${lane.meters} m</div>
@@ -441,7 +466,7 @@ function compactTable(heat) {
       .sort((a, b) => b.laps - a.laps)
       .map(
         (lane, index) =>
-          `<div class="pub-trow"><div class="pub-pos ${posClass(index)}">${index + 1}º</div><div class="pub-name">${escapeHtml(lane.team || lane.participant_name || "—")}</div><div class="pub-time">${lane.laps}</div></div>`
+          `<div class="pub-trow"><div class="pub-pos ${posClass(index)}">${index + 1}º</div><div class="pub-name">${escapeHtml(lane.team || pubName(lane.participant_name) || "—")}</div><div class="pub-time">${lane.laps}</div></div>`
       )
       .join("");
     return `<div class="pub-table pub-marathon"><div class="pub-thead"><div>Pos</div><div>Equipe</div><div style="text-align:right">Voltas</div></div>${rows}</div>`;
@@ -452,7 +477,7 @@ function compactTable(heat) {
   const rows = finished
     .map(
       (lane, index) =>
-        `<div class="pub-trow finished"><div class="pub-pos ${posClass(index)}">${index + 1}º</div><div class="pub-name">${escapeHtml(lane.participant_name || "—")}</div><div class="pub-time">${lane.race_time_display || formatTime(lane.race_time_ms)}</div></div>`
+        `<div class="pub-trow finished"><div class="pub-pos ${posClass(index)}">${index + 1}º</div><div class="pub-name">${escapeHtml(pubName(lane.participant_name) || "—")}</div><div class="pub-time">${lane.race_time_display || formatTime(lane.race_time_ms)}</div></div>`
     )
     .join("");
   return `<div class="pub-table pub-battery"><div class="pub-thead"><div>Pos</div><div>Nome</div><div style="text-align:right">Tempo</div></div>${rows || '<div class="pub-trow"><div class="muted">—</div></div>'}</div>`;
@@ -488,7 +513,7 @@ function podium(heat) {
       return `
         <div class="pub-podium-card place-${place}">
           <div class="pub-podium-medal">${medals[place - 1]}</div>
-          <div class="pub-podium-name">${escapeHtml(lane.participant_name || lane.team || "—")}</div>
+          <div class="pub-podium-name">${escapeHtml(pubName(lane.participant_name) || lane.team || "—")}</div>
           <div class="pub-podium-team">${logoImg(lane.team_logo_url, lane.team)} ${escapeHtml(lane.team || "—")}</div>
           <div class="pub-podium-result">${result}</div>
           <div class="pub-podium-team">${sub}</div>
@@ -530,7 +555,7 @@ function viewInterval() {
       <div class="pub-heat-name">${escapeHtml(provaHeaderLabel(inProva))}</div>
       <div class="pub-heat-type">${heatTypeLabel(inProva)}</div>
       <div style="margin-top:24px">
-        ${lanes.map((lane) => `<div class="pub-up-item"><span class="pub-up-num">R${lane.lane_number}</span><span>${escapeHtml(lane.participant_name || "—")} <span class="muted">· ${escapeHtml(lane.team || "sem equipe")}</span></span></div>`).join("") || '<div class="muted">Sem participantes</div>'}
+        ${lanes.map((lane) => `<div class="pub-up-item"><span class="pub-up-num">R${lane.lane_number}</span><span>${escapeHtml(pubName(lane.participant_name) || "—")} <span class="muted">· ${escapeHtml(lane.team || "sem equipe")}</span></span></div>`).join("") || '<div class="muted">Sem participantes</div>'}
       </div>`;
   } else if (nextProva) {
     nextInfo = `
@@ -664,6 +689,7 @@ async function refreshClassifications() {
 async function refreshEvent() {
   try {
     eventData = await api("GET", `/api/events/${eventId}`);
+    updateQr();
     await refreshClassifications();
     reconcile();
   } catch (error) {
@@ -747,6 +773,14 @@ const ws = new WSClient(wsUrl(), (message) => {
         if (state === 4 || state === 6) renderState(false);
       })
       .catch(() => {});
+  } else if (message.type === "settings_updated") {
+    if (eventData) {
+      eventData.public_results_enabled =
+        message.payload.public_results_enabled;
+      eventData.public_name_mode = message.payload.public_name_mode;
+    }
+    updateQr();
+    renderState(false);
   } else if (message.type === "error") {
     console.warn("WS:", message.message);
   }
@@ -775,6 +809,7 @@ document.addEventListener("fullscreenchange", () => {
 
 async function loadSelection() {
   els.overlay.hidden = true;
+  if (els.qr) els.qr.hidden = true;
   try {
     const all = await api("GET", "/api/events");
     events = all.filter((event) => event.status !== "finished");
@@ -796,6 +831,7 @@ async function init() {
     window.location.replace("publico.html");
     return;
   }
+  updateQr();
   await refreshClassifications();
   reconcile();
   ws.connect();

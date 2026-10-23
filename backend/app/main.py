@@ -9,21 +9,28 @@ from .database import engine, init_db
 from .routers import (
     athletes,
     events,
+    exports,
     heats,
     lanes,
     provas,
+    public,
     system,
     teams,
     ws,
 )
+from .services.backup import backup_service
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings.logo_dir.mkdir(parents=True, exist_ok=True)
     await init_db()
-    yield
-    await engine.dispose()
+    await backup_service.start()
+    try:
+        yield
+    finally:
+        await backup_service.stop()
+        await engine.dispose()
 
 
 app = FastAPI(title="SwimTimer", version="2.4.0", lifespan=lifespan)
@@ -43,6 +50,8 @@ app.include_router(athletes.router)
 app.include_router(provas.router)
 app.include_router(heats.router)
 app.include_router(lanes.router)
+app.include_router(exports.router)
+app.include_router(public.router)
 app.include_router(ws.router)
 
 

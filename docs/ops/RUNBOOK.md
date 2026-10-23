@@ -80,8 +80,78 @@ Confirma que os dados estão salvos:
 ```bash
 ls -la backend/data/
 # swimtimer.db   ← banco com todos os dados
-# backups/       ← backups automáticos (10 mais recentes)
+# backups/       ← backups automáticos por evento
+# journal/       ← diário NDJSON por evento
 ```
+
+---
+
+## Resultados públicos e QR
+
+- A TV (`publico.html`) mostra um QR code apontando para
+  `resultados.html?event=<id>`; aponte o celular para ele.
+- A página `resultados.html?event=<id>` é mobile-first: provas → classificação
+  (geral e por naipe) + baterias, com os selos **Oficial**, **Provisório** e
+  **Retificado**, e busca por atleta ou equipe.
+- Atualiza sozinha via WebSocket (e recarrega a cada 10 s como reserva).
+- Nada de `action_log`, IPs ou motivos internos aparece nesses endpoints.
+
+### Privacidade (opcional, por evento)
+
+Na **Gestão → Resultados públicos**:
+
+- **Publicar resultados**: liga/desliga a página e os endpoints
+  `/api/public/...` (padrão: ligado). A TV continua funcionando.
+- **Modo de nome**: `Nome completo` (padrão) ou `Iniciais` ("Maria S.").
+  Vale ao vivo (mensagem WS `settings_updated`).
+  Afeta **apenas** a TV e a página pública: súmulas, exportações, diário,
+  snapshots e a gestão mantêm o nome completo.
+- As configurações são somente leitura na página de resultados; a edição é
+  feita na gestão.
+
+### CRM/CSV e pacote do evento
+
+- `GET /api/events/<id>/export/results.csv` — CSV (`;`, UTF-8 com BOM) com
+  prova, bateria, raia, atleta, equipe, tempo, status, revisão e oficial.
+- `POST /api/events/<id>/export/bundle` — ZIP com backup do banco, CSV,
+  súmulas (HTML), diário NDJSON e `manifest.sha256`.
+- `sumula.html?heat=<id>` — súmula imprimível de uma bateria (`Ctrl+P`).
+
+---
+
+## Backup contínuo
+
+- O servidor faz backup do SQLite a cada `BACKUP_INTERVAL_MIN` (padrão 5 min)
+  para eventos com atividade e **10 s após cada bateria finalizar** (debounce).
+- Destino: `backend/data/backups/<event_id>/swimtimer_<data>.db` + sidecar
+  `.sha256`.
+- Retenção: 12 mais recentes + 1 por hora + o backup final (quando o evento é
+  encerrado).
+- `GET /api/status` expõe `last_backup_at`, `last_error` e `mirror_ok`; o
+  supervisor mostra um aviso vermelho se o último backup tem mais de 15 min ou
+  se o espelho falhou.
+- **Pendrive (espelho):** monte o pendrive e configure
+  `BACKUP_MIRROR_DIR=/app/mirror` no `.env`, descomentando o volume em
+  `docker-compose.yml`. Cada backup é copiado e verificado por checksum; se o
+  espelho falhar, o aviso vermelho aparece no supervisor.
+
+### Restaurar um backup
+
+```bash
+./scripts/restore.sh backend/data/backups/<event_id>/swimtimer_XXXX.db
+```
+
+O script valida o `.sha256`, para o serviço, preserva o banco atual em
+`swimtimer_pre_restore_<data>.db`, restaura com `sqlite3 .backup` e sobe o
+serviço novamente. Se o checksum não conferir, nada é alterado.
+
+### Verificar a auditoria
+
+```bash
+curl http://10.42.0.1:8080/api/events/<event_id>/audit/verify
+# {"ok": true, "count": N}  ou  {"ok": false, "broken_id": "..."}
+```
+
 
 ---
 

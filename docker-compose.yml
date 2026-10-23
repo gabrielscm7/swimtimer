@@ -5,6 +5,9 @@ services:
     volumes:
       - ./backend/data:/app/data
       - ./frontend:/app/frontend
+      # Espelho opcional de backup (pendrive). Monte o pendrive aqui e
+      # configure BACKUP_MIRROR_DIR=/app/mirror no .env.
+      # - /media/$USER/SWIMTIMER:/app/mirror:rw
     environment:
       - FRONTEND_DIR=/app/frontend
     env_file:

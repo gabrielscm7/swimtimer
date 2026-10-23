@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db
+from ..services.backup import backup_service
 from ..services.broadcast import _active_heat_count, manager
 
 START_TIME = time.time()
@@ -27,4 +28,5 @@ async def server_status(session: AsyncSession = Depends(get_db)) -> dict:
         "uptime": time.time() - START_TIME,
         "connected_clients": manager.count,
         "active_heats": await _active_heat_count(session),
+        **backup_service.status(),
     }
