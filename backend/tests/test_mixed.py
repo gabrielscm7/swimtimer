@@ -95,6 +95,41 @@ def test_overall_only_omits_by_naipe():
     assert result["standings_by_naipe"] is None
 
 
+def test_nao_misto_forca_ranking_geral_mesmo_pedindo_por_naipe():
+    for naipe in ("M", "F"):
+        result = build_classification(
+            heats=[
+                _heat(
+                    [
+                        _lane("m1", 1, 60000, "M"),
+                        _lane("f1", 2, 61000, "F"),
+                    ]
+                )
+            ],
+            team_map={},
+            pool_distance_m=25,
+            mixed_ranking="both",
+            prova_naipe=naipe,
+        )
+        assert result["mixed_ranking"] == "overall"
+        assert result["standings_by_naipe"] is None
+        assert len(result["standings"]) == 2
+
+
+def test_misto_com_um_so_naipe_devolve_grupo_vazio():
+    result = build_classification(
+        heats=[_heat([_lane("m1", 1, 60000, "M"), _lane("m2", 2, 61000, "M")])],
+        team_map={},
+        pool_distance_m=25,
+        mixed_ranking="both",
+        prova_naipe="MISTO",
+    )
+    by_naipe = result["standings_by_naipe"]
+    assert set(by_naipe.keys()) == {"M", "F"}
+    assert [entry["lane_id"] for entry in by_naipe["M"]] == ["m1", "m2"]
+    assert by_naipe["F"] == []
+
+
 @pytest.mark.asyncio
 async def test_prova_misto_accepts_m_and_f_and_reports_rankings(client):
     event = await create_event(client)
@@ -157,6 +192,34 @@ async def test_prova_nao_misto_usa_apenas_geral(client):
         await client.get(f"/api/provas/{heat['prova_id']}/classification")
     ).json()
     assert body["mixed_ranking"] == "overall"
+    assert body["standings_by_naipe"] is None
+
+
+@pytest.mark.asyncio
+async def test_prova_misto_com_um_so_naipe_devolve_outro_vazio(client):
+    event = await create_event(client)
+    heat = await create_heat(
+        client, event["id"], stroke="costas", distance_m=100, naipe="MISTO"
+    )
+    male = await create_athlete(client, event["id"], name="Mario", naipe="M")
+    lanes = await client.post(
+        f"/api/heats/{heat['id']}/lanes",
+        json={"lanes": [{"lane_number": 1, "athlete_id": male["id"]}]},
+    )
+    assert lanes.status_code == 200, lanes.text
+    await client.post(f"/api/heats/{heat['id']}/open-ready-check")
+    current = (await client.get(f"/api/heats/{heat['id']}")).json()
+    await ready_all(client, current)
+    await client.post(f"/api/heats/{heat['id']}/start")
+    await asyncio.sleep(0.01)
+    await client.post(f"/api/lanes/{current['heat_lanes'][0]['id']}/finish")
+
+    body = (
+        await client.get(f"/api/provas/{heat['prova_id']}/classification")
+    ).json()
+    assert body["mixed_ranking"] == "both"
+    assert body["standings_by_naipe"]["M"]
+    assert body["standings_by_naipe"]["F"] == []
 
 
 @pytest.mark.asyncio

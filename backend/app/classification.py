@@ -19,6 +19,23 @@ def prova_status(heat_statuses: list[str]) -> str:
     return "in_progress"
 
 
+def effective_mixed_ranking(
+    prova_naipe: str | None, requested: str = "both"
+) -> str:
+    """Somente prova MISTO tem ranking por naipe.
+
+    Provas masculinas/femininas (ou sem naipe) sao sempre apenas gerais; o
+    pedido por `by_naipe`/`both` e ignorado para nao gerar tabela vazia.
+    """
+    valid = {"overall", "by_naipe", "both"}
+    wanted = requested if requested in valid else "both"
+    if prova_naipe is None:
+        return wanted
+    if (prova_naipe or "").upper() != "MISTO":
+        return "overall"
+    return wanted
+
+
 def is_provisional(heat_statuses: list[str]) -> bool:
     if not heat_statuses:
         return True
@@ -131,13 +148,16 @@ def build_classification(
     prova_distance_m: int | None = None,
     prova_id: str | None = None,
     mixed_ranking: str = "both",
+    prova_naipe: str | None = None,
 ) -> dict:
     """Monta a resposta de classificacao a partir de heats ja carregados.
 
     `heats` e uma lista de dicts com id, name, order_num, status, distance_m e
     lanes (lista de dicts com id, lane_number, participant_name, team_id,
-    status, race_time_ms).
+    status, race_time_ms). Quando `prova_naipe` e informado, a regra de
+    ranking e aplicada: provas M/F nunca expoem `standings_by_naipe`.
     """
+    mixed_ranking = effective_mixed_ranking(prova_naipe, mixed_ranking)
     statuses = [heat.get("status", "scheduled") for heat in heats]
     battery_results: list[dict] = []
     all_entries: list[dict] = []

@@ -4,6 +4,37 @@ Formato: [Semantic Versioning](https://semver.org/lang/pt-BR/)
 
 ---
 
+## [2.8.0] — 2026-10-24
+
+### Added
+- Telão 16:9 sem rolagem: palco em grid (cabeçalho EVENTO, corpo, rodapé),
+  tipografia em `vh` com piso de 22 px, nome do atleta em uma linha e tabelas
+  usando toda a largura útil.
+- Paginação automática por altura útil (rotação a cada 8 s com indicador
+  `1/N`), classificação em duas colunas (1–10 | 11–20) e baterias lado a lado
+  em 2–3 colunas.
+- Identidade por nível no telão (faixa do evento + chips PROVA/BATERIA),
+  reutilizando os tokens `--lvl-prova`/`--lvl-bateria`.
+- `static/common/result_views.js`: fonte única de renderização de resultado de
+  prova e de bateria para telão, resultados e súmula.
+- Prévia do telão em `resultados.html` (iframe 16:9 escalado, modo preview sem
+  efeitos no servidor) e botão “Enviar ao telão agora”.
+- `scripts/seed_demo.py` (evento de demonstração determinístico) e
+  `scripts/tv_check.py` (Playwright em 1920×1080, 1366×768 e 1280×720,
+  capturas em `docs/screenshots/`).
+- `backend/requirements-dev.txt` com Playwright (apenas desenvolvimento).
+- Hook `?preview=1&fast=1` para acelerar os tempos de resultado na verificação.
+
+### Changed
+- Somente provas MISTO exibem classificação geral + por naipe; provas M/F
+  exibem uma única tabela e nenhuma tabela vazia é renderizada.
+- Resultado da bateria não repete mais a classificação consolidada da prova.
+- `heat_state`, `prova_state`, `presentation_updated`, `settings_updated` e
+  `theme_updated` redesenham o estado atual (inclusive 7 e 8) preservando a
+  página; números mágicos substituídos por `STATE.*`.
+
+---
+
 ## [2.7.0] — 2026-10-23
 
 ### Added

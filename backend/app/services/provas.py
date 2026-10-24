@@ -15,6 +15,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import domain
+from ..classification import effective_mixed_ranking
 from ..models import Event, Heat, Prova, ResultSnapshot
 
 
@@ -309,8 +310,8 @@ async def group_heats(
 
 
 def group_mixed_ranking(prova: Prova) -> str:
-    """Prova MISTO sempre exibe geral + por naipe; demais apenas geral."""
-    return "both" if (prova.naipe or "").upper() == "MISTO" else "overall"
+    """Regra unica: MISTO exibe geral + por naipe; demais apenas geral."""
+    return effective_mixed_ranking(prova.naipe, "both")
 
 
 async def assert_group_invariant(

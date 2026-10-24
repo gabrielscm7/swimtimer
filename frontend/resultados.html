@@ -290,6 +290,53 @@
         font-size: 0.78rem;
         margin: 10px 0 0;
       }
+      .res-tv-strip {
+        display: grid;
+        grid-template-columns: minmax(0, 620px) minmax(0, 1fr);
+        gap: 16px;
+        align-items: start;
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        padding: 14px;
+        margin-bottom: 16px;
+      }
+      .res-tv-strip h2 {
+        margin: 0 0 8px;
+        font-size: 0.78rem;
+        letter-spacing: 1px;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+      .res-tv-frame {
+        position: relative;
+        aspect-ratio: 16 / 9;
+        width: 100%;
+        overflow: hidden;
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        background: #000;
+      }
+      .res-tv-frame iframe {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 1920px;
+        height: 1080px;
+        border: 0;
+        transform-origin: top left;
+      }
+      .res-tv-side {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        min-width: 0;
+      }
+      @media (max-width: 900px) {
+        .res-tv-strip {
+          grid-template-columns: 1fr;
+        }
+      }
       @media (max-width: 1180px) {
         .res-layout {
           grid-template-columns: 220px minmax(0, 1fr);
@@ -329,6 +376,32 @@
       </header>
 
       <div id="res-status" class="res-message" hidden></div>
+
+      <section class="res-tv-strip">
+        <div>
+          <h2>Prévia do telão</h2>
+          <div class="res-tv-frame" id="res-tv-frame">
+            <iframe
+              id="res-tv-preview"
+              title="Prévia do telão"
+              loading="lazy"
+            ></iframe>
+          </div>
+        </div>
+        <div class="res-tv-side">
+          <h2>Ao vivo, sem recarregar</h2>
+          <p class="res-legend" style="margin: 0">
+            Mostra o telão em 1920×1080 escalado. A prévia não altera o estado
+            do servidor; a prova ao vivo continua tendo prioridade.
+          </p>
+          <div class="res-actions" style="margin-top: 0">
+            <button class="res-btn primary" id="res-send-tv">
+              Enviar ao telão agora
+            </button>
+          </div>
+          <p class="res-legend" id="res-send-tv-hint" style="margin: 0"></p>
+        </div>
+      </section>
 
       <div class="res-layout">
         <aside class="res-side">

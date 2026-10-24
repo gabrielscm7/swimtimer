@@ -1,4 +1,5 @@
 import { escapeHtml } from "./common/format.js";
+import { renderHeatResult } from "./common/result_views.js";
 
 const params = new URLSearchParams(window.location.search);
 const heatId = params.get("heat");
@@ -24,21 +25,6 @@ function render(heat, event) {
   const snapshot = heat.result_snapshot;
   const status = snapshot ? snapshot.status : "provisional";
   const revision = snapshot ? snapshot.revision : "—";
-  const lanes = (heat.heat_lanes || [])
-    .filter((lane) => lane.participant_name || lane.team_id)
-    .sort((a, b) => a.lane_number - b.lane_number);
-  const rows = lanes
-    .map(
-      (lane) => `<tr>
-        <td><span class="level-chip bateria">BATERIA</span></td>
-        <td>${lane.lane_number}</td>
-        <td>${escapeHtml(lane.participant_name || "—")}</td>
-        <td>${escapeHtml(lane.team || "—")}</td>
-        <td class="time">${escapeHtml(lane.race_time_display || "—")}</td>
-        <td>${escapeHtml(lane.status || "—")}</td>
-      </tr>`
-    )
-    .join("");
   const printedAt = new Date().toLocaleString("pt-BR");
   container.innerHTML = `
     <div class="sheet">
@@ -56,10 +42,10 @@ function render(heat, event) {
         <span>Distância: ${heat.distance_m ? escapeHtml(String(heat.distance_m)) + " m" : "—"}</span>
         <span>Impresso em: ${escapeHtml(printedAt)}</span>
       </div>
-      <table>
-        <thead><tr><th>Nível</th><th>Raia</th><th>Atleta</th><th>Equipe</th><th>Tempo</th><th>Status</th></tr></thead>
-        <tbody>${rows || '<tr><td colspan="6">Sem participantes.</td></tr>'}</tbody>
-      </table>
+      ${
+        renderHeatResult(heat, { variant: "print" }) ||
+        "<p>Sem participantes.</p>"
+      }
       <div class="signatures">
         <div>Árbitro</div>
         <div>Mesário</div>

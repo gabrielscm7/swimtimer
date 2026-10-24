@@ -434,6 +434,7 @@ async def _classification_payload(
         prova_distance_m=prova.distance_m,
         prova_id=prova.id,
         mixed_ranking=group_mixed_ranking(prova),
+        prova_naipe=prova.naipe,
     )
     return {
         "prova_id": prova.id,

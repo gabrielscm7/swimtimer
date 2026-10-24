@@ -25,3 +25,6 @@ backend/data/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Capturas geradas pelo scripts/tv_check.py
+docs/screenshots/

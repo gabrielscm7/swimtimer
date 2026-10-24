@@ -1,5 +1,6 @@
 import { api } from "./common/api.js";
-import { escapeHtml, formatTime } from "./common/format.js";
+import { escapeHtml } from "./common/format.js";
+import { renderHeatResult, renderProvaResult } from "./common/result_views.js";
 import { showToast, statusLabel } from "./common/ui.js";
 import { WSClient, wsUrl } from "./common/ws.js";
 
@@ -18,6 +19,10 @@ const els = {
   publicLink: document.getElementById("res-public-link"),
   exportLink: document.getElementById("res-export-link"),
   audit: document.getElementById("res-audit"),
+  tvFrame: document.getElementById("res-tv-frame"),
+  tvPreview: document.getElementById("res-tv-preview"),
+  sendTv: document.getElementById("res-send-tv"),
+  sendTvHint: document.getElementById("res-send-tv-hint"),
 };
 
 let tree = null;
@@ -102,114 +107,19 @@ function provaBadge(heats) {
   return '<span class="res-badge provisional">Provisório</span>';
 }
 
-function classificationStatusLabel(status) {
-  return (
-    {
-      valid: "Válido",
-      dq: "Desclassificado",
-      no_time: "Sem tempo",
-      pending: "Em andamento",
-    }[status] || status || "—"
-  );
-}
-
-function entryRow(entry, showPosition) {
-  const label = entry.race_time_display || "—";
-  return `<tr>
-    ${showPosition ? `<td class="pos">${entry.position ? `${entry.position}º${entry.tied ? "=" : ""}` : "—"}</td>` : ""}
-    <td>${escapeHtml(entry.participant_name || "—")}</td>
-    <td class="muted">${escapeHtml(entry.team_name || "—")}</td>
-    <td class="time">${escapeHtml(label)}</td>
-    <td>${escapeHtml(classificationStatusLabel(entry.classification_status))}</td>
-  </tr>`;
-}
-
-function classificationTable(title, entries) {
-  if (!entries || !entries.length) return "";
-  return `
-    <div class="res-section-title">${escapeHtml(title)}</div>
-    <table class="res-table">
-      <thead><tr><th>Pos</th><th>Atleta</th><th>Equipe</th><th>Tempo</th><th>Status</th></tr></thead>
-      <tbody>${entries.map((entry) => entryRow(entry, true)).join("")}</tbody>
-    </table>`;
-}
-
-function excludedTable(entries) {
-  if (!entries || !entries.length) return "";
-  return `
-    <div class="res-section-title">Fora da classificação</div>
-    <table class="res-table">
-      <thead><tr><th>Atleta</th><th>Equipe</th><th>Tempo</th><th>Status</th></tr></thead>
-      <tbody>${entries.map((entry) => entryRow(entry, false)).join("")}</tbody>
-    </table>`;
-}
-
 function classificationHTML(summary) {
   const data = summary.classification || {};
   const help = Labels.classificationHelp(true, summary.heat_count);
-  const mode = data.mixed_ranking || summary.mixed_ranking || "both";
-  const sections = [];
-  if (mode !== "by_naipe") {
-    sections.push(classificationTable("Classificação geral", data.standings || []));
-  }
-  if (mode !== "overall" && data.standings_by_naipe) {
-    sections.push(
-      classificationTable("Masculino", data.standings_by_naipe.M || [])
-    );
-    sections.push(
-      classificationTable("Feminino", data.standings_by_naipe.F || [])
-    );
-  }
-  sections.push(excludedTable(data.excluded || []));
+  const sections = renderProvaResult(summary, data, { variant: "table" });
   return `
     <div class="level-title prova"><span class="level-chip prova"><span class="level-icon">◆</span>PROVA</span> Resultado da PROVA</div>
     <p class="res-legend">${escapeHtml(help)}</p>
-    ${sections.join("") || '<p class="res-empty">Nenhum resultado válido ainda.</p>'}
+    ${sections || '<p class="res-empty">Nenhum resultado válido ainda.</p>'}
     <p class="res-legend">${
       data.is_provisional
         ? "Classificação provisória: há baterias pendentes ou em andamento."
         : "Classificação definitiva: todas as baterias foram finalizadas."
     }</p>`;
-}
-
-function laneResult(lane, heatType) {
-  if (lane.status === "dq") return "DQ";
-  if (heatType === "maratona") {
-    return `${lane.laps || 0} voltas · ${lane.meters || 0} m`;
-  }
-  return (
-    lane.race_time_display ||
-    (lane.race_time_ms != null ? formatTime(lane.race_time_ms) : "—")
-  );
-}
-
-function batteryTable(heat) {
-  const lanes = [...(heat.heat_lanes || [])]
-    .filter((lane) => lane.participant_name || lane.athlete_id || lane.team_id)
-    .sort((a, b) => a.lane_number - b.lane_number);
-  if (!lanes.length) {
-    return '<p class="res-empty">Sem participantes nesta bateria.</p>';
-  }
-  const rows = lanes
-    .map(
-      (lane) => `<tr>
-        <td class="pos">${lane.lane_number}</td>
-        <td>${escapeHtml(lane.participant_name || "—")}</td>
-        <td class="muted">${escapeHtml(lane.team || "—")}</td>
-        <td class="time">${escapeHtml(laneResult(lane, heat.heat_type))}</td>
-        <td>${escapeHtml(statusLabel(lane.status))}${
-          lane.late ? ' <span class="res-badge provisional">atrasado</span>' : ""
-        }</td>
-      </tr>`
-    )
-    .join("");
-  return `
-    <table class="res-table">
-      <thead><tr><th>Raia</th><th>Atleta</th><th>Equipe</th><th>${
-        heat.heat_type === "maratona" ? "Parcial" : "Tempo"
-      }</th><th>Status</th></tr></thead>
-      <tbody>${rows}</tbody>
-    </table>`;
 }
 
 function batteryCard(heat, details, forceOpen) {
@@ -236,7 +146,10 @@ function batteryCard(heat, details, forceOpen) {
         ${snapshotBadge(snapshot)}
         <span class="muted">${finished}/${participants.length} finalizadas</span>
       </summary>
-      <div style="margin-top:10px">${batteryTable(details || heat)}</div>
+      <div style="margin-top:10px">${
+        renderHeatResult(details || heat, { variant: "table" }) ||
+        '<p class="res-empty">Sem participantes nesta bateria.</p>'
+      }</div>
       <div class="res-actions">
         <button class="res-btn" data-action="add-bateria" data-id="${heat.id}">Adicionar ao telão</button>
         <button class="res-btn" data-action="pin-ref" data-kind="bateria" data-id="${heat.id}">Fixar agora</button>
@@ -435,6 +348,7 @@ async function selectProva(provaId, heatId = null, update = true) {
   selectedProvaId = provaId;
   selectedHeatId = heatId;
   renderSidebar();
+  updateSendHint();
   if (update) updateUrl();
   els.detail.innerHTML = '<div class="res-message">Carregando prova…</div>';
   try {
@@ -478,6 +392,76 @@ async function savePresentation() {
     showToast("Apresentação salva");
   } catch (error) {
     showToast(`Erro ao salvar: ${error.message}`, true);
+  }
+}
+
+function setupPreview() {
+  if (!els.tvPreview || !els.tvFrame) return;
+  els.tvPreview.src = `publico.html?event=${encodedId()}&preview=1`;
+  const resize = () => {
+    const width = els.tvFrame.clientWidth;
+    if (!width) return;
+    els.tvPreview.style.transform = `scale(${width / 1920})`;
+  };
+  if (typeof ResizeObserver === "function") {
+    new ResizeObserver(resize).observe(els.tvFrame);
+  }
+  window.addEventListener("resize", resize);
+  resize();
+}
+
+function updateSendHint() {
+  if (!els.sendTvHint) return;
+  if (selectedHeatId) {
+    const found = findHeat(selectedHeatId);
+    els.sendTvHint.textContent = found
+      ? `Slide: ${Labels.bateriaLabel(found.heat, {
+          index: found.heat.heat_index_in_prova,
+          total: found.heat.heats_in_prova,
+          provaOrder: found.prova.order_num,
+          includeProva: true,
+        })}`
+      : "Selecione uma prova ou bateria.";
+    return;
+  }
+  if (selectedProvaId) {
+    const prova = findProva(selectedProvaId);
+    els.sendTvHint.textContent = prova
+      ? `Slide: ${Labels.provaLabel(prova)}`
+      : "Selecione uma prova ou bateria.";
+    return;
+  }
+  els.sendTvHint.textContent = "Selecione uma prova ou bateria.";
+}
+
+async function sendToScreenNow() {
+  const kind = selectedHeatId ? "bateria" : "prova";
+  const targetId = selectedHeatId || selectedProvaId;
+  if (!targetId) {
+    showToast("Selecione uma prova ou bateria.", true);
+    return;
+  }
+  try {
+    if (!draft) await loadPresentation();
+    if (!draft) return;
+    const ref = `${kind}:${targetId}`;
+    if (!draft.slides.some((slide) => refOf(slide) === ref)) {
+      draft.slides.push({ kind, target_id: targetId });
+    }
+    draft.enabled = true;
+    draft.pinned_ref = ref;
+    presentation = await api(
+      "PUT",
+      `/api/events/${encodedId()}/presentation`,
+      draft
+    );
+    draft = draftFromPresentation(presentation);
+    dirty = false;
+    renderPresentation();
+    updateSendHint();
+    showToast("Enviado ao telão agora");
+  } catch (error) {
+    showToast(`Erro ao enviar ao telão: ${error.message}`, true);
   }
 }
 
@@ -549,8 +533,13 @@ els.detail.addEventListener("toggle", (event) => {
   const details = event.target.closest("details[data-heat]");
   if (!details) return;
   selectedHeatId = details.open ? details.dataset.heat : null;
+  updateSendHint();
   updateUrl();
 }, true);
+
+if (els.sendTv) {
+  els.sendTv.addEventListener("click", sendToScreenNow);
+}
 
 els.presentation.addEventListener("change", (event) => {
   const field = event.target.dataset.pres;
@@ -639,6 +628,7 @@ async function init() {
   try {
     await loadTree();
     await loadPresentation();
+    setupPreview();
     els.message.hidden = true;
     const urlProva = params.get("prova");
     const urlHeat = params.get("heat");

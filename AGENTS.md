@@ -22,6 +22,34 @@ bash tests/ops/test_ensure_env.sh
 bash tests/ops/test_restore.sh
 ```
 
+## Telão (seed + verificação visual)
+
+Dependência só de dev (`backend/requirements-dev.txt`), instalada à parte:
+
+```bash
+uv run --no-project --python 3.11 --with-requirements backend/requirements-dev.txt \
+  playwright install chromium
+```
+
+Seed de demonstração (8 equipes, prova masculina com 5 baterias × 7 raias,
+prova MISTO com 2 baterias, tudo determinístico):
+
+```bash
+uv run --no-project --python 3.11 --with-requirements backend/requirements.txt \
+  python scripts/seed_demo.py --db /tmp/swimtimer_demo.db
+```
+
+Verificação visual do telão (Playwright; sobe backend efêmero, percorre os
+estados 1–8 em 1920×1080, 1366×768 e 1280×720 e salva capturas em
+`docs/screenshots/`):
+
+```bash
+uv run --no-project --python 3.11 \
+  --with-requirements backend/requirements.txt \
+  --with-requirements backend/requirements-dev.txt \
+  python scripts/tv_check.py
+```
+
 ## Snapshot da API
 
 ```bash
